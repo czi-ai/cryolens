@@ -186,8 +186,8 @@ def main():
             create_ortho_view(mol2_data, pair['mol2'], img2_path)
             
             # Add row to markdown table
-            img1_rel = f"images/{img1_path.name}"
-            img2_rel = f"images/{img2_path.name}"
+            img1_rel = f"figures/{img1_path.name}"
+            img2_rel = f"figures/{img2_path.name}"
             
             md_file.write(f"| ![{pair['mol1']}]({img1_rel}) | ![{pair['mol2']}]({img2_rel}) | {pair['affinity']:.4f} |\n")
             
