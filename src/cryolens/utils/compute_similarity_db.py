@@ -10,7 +10,7 @@ import threading
 from tqdm import tqdm
 import numpy.ma as ma
 from mrcfile import open as mrc_open
-from scipy.ndimage import zoom
+from scipy.ndimage import zoom, gaussian_filter
 import sqlite3
 import io
 import logging
@@ -18,6 +18,8 @@ import sys
 import shutil
 import torch
 from torch.nn import functional as F
+import gemmi
+import pandas as pd
 
 # Set up logger
 logging.basicConfig(
@@ -185,11 +187,19 @@ class DatabaseManager:
 class MRCProcessor:
     """Loads and processes MRC files"""
     
-    def __init__(self, mrc_dir, box_size=48):
-        self.mrc_dir = Path(mrc_dir)
+    def __init__(self, mrc_dir, box_size=48, voxel_size=10.0, resolution=15.0, pdb_dir=None):
+        self.mrc_dir = Path(mrc_dir) if mrc_dir else None
+        self.pdb_dir = Path(pdb_dir) if pdb_dir else None
         self.box_size = box_size
+        self.voxel_size = voxel_size  # Angstroms per voxel
+        self.resolution = resolution  # Target resolution in Angstroms
         self.structures = {}
-        self._find_mrcs()
+        self.structure_info = {}  # Store metadata about structures
+        
+        if self.mrc_dir:
+            self._find_mrcs()
+        if self.pdb_dir:
+            self._find_pdbs()
     
     def _find_mrcs(self):
         """Find all MRC files in the directory"""
@@ -210,42 +220,212 @@ class MRCProcessor:
         logger.info(f"Found {len(mrc_files)} MRC files in {self.mrc_dir}")
         self.mrc_files = mrc_files
     
+    def _find_pdbs(self):
+        """Find all PDB files in the directory"""
+        pdb_files = {}
+        for pdb_path in self.pdb_dir.glob("*.pdb"):
+            structure_id = pdb_path.stem
+            pdb_files[structure_id] = pdb_path
+        
+        logger.info(f"Found {len(pdb_files)} PDB files in {self.pdb_dir}")
+        self.pdb_files = pdb_files
+    
     def get_structure_ids(self):
         """Get all available structure IDs"""
-        return list(self.mrc_files.keys())
+        ids = set()
+        if hasattr(self, 'mrc_files'):
+            ids.update(self.mrc_files.keys())
+        if hasattr(self, 'pdb_files'):
+            ids.update(self.pdb_files.keys())
+        return list(ids)
+    
+    def _pdb_to_density(self, filename, box_size=None, voxel_size=None, resolution=None):
+        """Convert PDB structure to density map with proper physical units."""
+        box_size = box_size or self.box_size
+        voxel_size = voxel_size or self.voxel_size
+        resolution = resolution or self.resolution
+        
+        try:
+            # Read structure
+            st = gemmi.read_structure(str(filename))
+            
+            # Extract coordinates (already in Angstroms) with mass weighting
+            coords = []
+            masses = []
+            for model in st:
+                for chain in model:
+                    for residue in chain:
+                        for atom in residue:
+                            pos = atom.pos
+                            coords.append([pos.x, pos.y, pos.z])
+                            # Use actual atomic mass
+                            masses.append(atom.element.weight if atom.element else 12.0)
+            
+            if not coords:
+                raise RuntimeError("No atoms found in structure")
+                
+            coords = np.array(coords)
+            masses = np.array(masses)
+            
+            # Center coordinates by center of mass
+            center = np.average(coords, weights=masses, axis=0)
+            coords = coords - center
+            
+            # Convert coordinates to voxel space (no scaling - preserve actual size)
+            coords_voxels = coords / voxel_size
+            
+            # Shift to center of box
+            coords_voxels = coords_voxels + box_size/2
+            
+            # Create weighted density map
+            density = np.zeros((box_size, box_size, box_size), dtype=np.float32)
+            
+            # Check which atoms are within bounds
+            in_bounds = np.all((coords_voxels >= 0) & (coords_voxels < box_size - 1), axis=1)
+            coords_voxels = coords_voxels[in_bounds]
+            masses_in_bounds = masses[in_bounds]
+            
+            if len(coords_voxels) == 0:
+                logger.warning(f"No atoms within box for {filename.name}")
+                return density
+            
+            # Place atoms with trilinear interpolation
+            for coord, mass in zip(coords_voxels, masses_in_bounds):
+                # Get integer and fractional parts
+                idx = coord.astype(int)
+                frac = coord - idx
+                
+                # Trilinear interpolation weights
+                for dx in range(2):
+                    for dy in range(2):
+                        for dz in range(2):
+                            weight = (1 - abs(dx - frac[0])) * \
+                                    (1 - abs(dy - frac[1])) * \
+                                    (1 - abs(dz - frac[2]))
+                            density[idx[0]+dx, idx[1]+dy, idx[2]+dz] += mass * weight
+            
+            # Convert resolution to sigma in voxel units
+            sigma_voxels = resolution / (2.355 * voxel_size)  # FWHM to sigma conversion
+            
+            # Smooth to target resolution
+            if sigma_voxels > 0:
+                density = gaussian_filter(density, sigma=sigma_voxels)
+            
+            # Normalize
+            if density.max() > density.min():
+                density = (density - density.min()) / (density.max() - density.min())
+            
+            return density
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to process PDB file: {str(e)}")
+    
+    def _get_structure_info(self, pdb_path):
+        """Extract structure information from PDB file."""
+        try:
+            st = gemmi.read_structure(str(pdb_path))
+            
+            coords = []
+            masses = []
+            elements = {}
+            chains = []
+            
+            for model in st:
+                for chain in model:
+                    chains.append(chain.name)
+                    for residue in chain:
+                        for atom in residue:
+                            coords.append([atom.pos.x, atom.pos.y, atom.pos.z])
+                            elem = atom.element.name if atom.element else 'X'
+                            elements[elem] = elements.get(elem, 0) + 1
+                            masses.append(atom.element.weight if atom.element else 12.0)
+            
+            if coords:
+                coords = np.array(coords)
+                masses = np.array(masses)
+                
+                # Calculate center of mass
+                center = np.average(coords, weights=masses, axis=0)
+                coords_centered = coords - center
+                
+                # Radius of gyration
+                rg = np.sqrt(np.average(np.sum(coords_centered**2, axis=1), weights=masses))
+                
+                # Extent
+                extent = coords.max(axis=0) - coords.min(axis=0)
+                
+                # Molecular weight
+                molecular_weight = np.sum(masses)
+                
+                return {
+                    'name': pdb_path.stem,
+                    'n_atoms': len(coords),
+                    'n_chains': len(set(chains)),
+                    'molecular_weight_da': molecular_weight,
+                    'molecular_weight_kda': molecular_weight / 1000,
+                    'extent_angstroms': extent.tolist(),
+                    'max_extent_angstroms': float(np.max(extent)),
+                    'radius_of_gyration': float(rg),
+                    'estimated_diameter_nm': float(np.max(extent) / 10),
+                }
+            else:
+                return {'name': pdb_path.stem, 'error': 'No atoms found'}
+                
+        except Exception as e:
+            return {'name': pdb_path.stem, 'error': str(e)}
     
     def load_structure(self, structure_id):
-        """Load a specific structure"""
+        """Load a specific structure from MRC or PDB"""
         if structure_id in self.structures:
             return True
         
-        if structure_id not in self.mrc_files:
-            logger.warning(f"Structure {structure_id} not found")
-            return False
+        # Try MRC first
+        if hasattr(self, 'mrc_files') and structure_id in self.mrc_files:
+            try:
+                mrc_path = self.mrc_files[structure_id]
+                with mrc_open(mrc_path, mode='r') as mrc:
+                    density_map = mrc.data.astype(np.float32)
+                    
+                    # Resize if needed
+                    if density_map.shape != (self.box_size,) * 3:
+                        logger.info(f"Resizing {mrc_path.name} from {density_map.shape} to {(self.box_size,) * 3}")
+                        scale_factor = self.box_size / density_map.shape[0]
+                        density_map = zoom(density_map, (scale_factor,) * 3, 
+                                          order=1, mode='constant', cval=0.0,
+                                          grid_mode=True)
+                    
+                    # Normalize
+                    if density_map.max() > density_map.min():
+                        density_map = (density_map - density_map.min()) / (density_map.max() - density_map.min())
+                    
+                    self.structures[structure_id] = density_map
+                    return True
+                    
+            except Exception as e:
+                logger.error(f"Failed to load MRC structure {structure_id}: {e}")
         
-        try:
-            mrc_path = self.mrc_files[structure_id]
-            with mrc_open(mrc_path, mode='r') as mrc:
-                density_map = mrc.data.astype(np.float32)
+        # Try PDB
+        if hasattr(self, 'pdb_files') and structure_id in self.pdb_files:
+            try:
+                pdb_path = self.pdb_files[structure_id]
                 
-                # Resize if needed
-                if density_map.shape != (self.box_size,) * 3:
-                    logger.info(f"Resizing {mrc_path.name} from {density_map.shape} to {(self.box_size,) * 3}")
-                    scale_factor = self.box_size / density_map.shape[0]
-                    density_map = zoom(density_map, (scale_factor,) * 3, 
-                                      order=1, mode='constant', cval=0.0,
-                                      grid_mode=True)
+                # Get structure info
+                info = self._get_structure_info(pdb_path)
+                self.structure_info[structure_id] = info
                 
-                # Normalize
-                if density_map.max() > density_map.min():
-                    density_map = (density_map - density_map.min()) / (density_map.max() - density_map.min())
-                
+                # Convert to density
+                density_map = self._pdb_to_density(pdb_path)
                 self.structures[structure_id] = density_map
+                
+                logger.info(f"Loaded PDB {structure_id}: {info.get('molecular_weight_kda', 0):.1f} kDa, "
+                           f"{info.get('estimated_diameter_nm', 0):.1f} nm diameter")
                 return True
                 
-        except Exception as e:
-            logger.error(f"Failed to load structure {structure_id}: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"Failed to load PDB structure {structure_id}: {e}")
+        
+        logger.warning(f"Structure {structure_id} not found in MRC or PDB files")
+        return False
     
     def get_density(self, structure_id):
         """Get density map for a structure"""
@@ -259,12 +439,13 @@ class MRCProcessor:
 class SimilarityCalculator:
     """Calculates feature vectors and similarity matrix"""
     
-    def __init__(self, mrc_processor, db_path, voxel_size=5.0):
+    def __init__(self, mrc_processor, db_path):
         self.mrc_processor = mrc_processor
         self.db = DatabaseManager(db_path)
-        self.voxel_size = voxel_size
+        self.voxel_size = mrc_processor.voxel_size  # Get from processor
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {self.device}")
+        logger.info(f"Using voxel size: {self.voxel_size} Å/voxel")
 
     def _extract_features(self, density):
         """Extract features from density map using a simple feature extraction method"""
@@ -458,17 +639,29 @@ class SimilarityCalculator:
 
 def main():
     parser = argparse.ArgumentParser(description="Compute similarity database for TomotWin")
-    parser.add_argument("--mrcs_dir", type=str, required=True, help="Directory containing MRC files")
+    parser.add_argument("--mrcs_dir", type=str, help="Directory containing MRC files")
+    parser.add_argument("--pdb_dir", type=str, help="Directory containing PDB files")
     parser.add_argument("--db_path", type=str, required=True, help="Path to SQLite database file")
     parser.add_argument("--box_size", type=int, default=48, help="Box size for density maps")
-    parser.add_argument("--voxel_size", type=float, default=5.0, help="Voxel size in Angstroms")
+    parser.add_argument("--voxel_size", type=float, default=10.0, help="Voxel size in Angstroms (default: 10.0)")
+    parser.add_argument("--resolution", type=float, default=15.0, help="Target resolution in Angstroms (default: 15.0)")
     parser.add_argument("--force_recalculate", action="store_true", help="Force recalculation of matrix")
     parser.add_argument("--clean_db", action="store_true", help="Clean database before calculation")
     parser.add_argument("--backup_db", action="store_true", help="Backup database before modification")
     args = parser.parse_args()
+    
+    # Validate that at least one directory is provided
+    if not args.mrcs_dir and not args.pdb_dir:
+        parser.error("At least one of --mrcs_dir or --pdb_dir must be provided")
 
-    # Initialize MRC processor
-    mrc_processor = MRCProcessor(args.mrcs_dir, box_size=args.box_size)
+    # Initialize MRC processor (now handles both MRC and PDB)
+    mrc_processor = MRCProcessor(
+        mrc_dir=args.mrcs_dir, 
+        pdb_dir=args.pdb_dir,
+        box_size=args.box_size,
+        voxel_size=args.voxel_size,
+        resolution=args.resolution
+    )
     
     # Check if we have structures
     structure_ids = mrc_processor.get_structure_ids()
@@ -489,8 +682,7 @@ def main():
     # Initialize similarity calculator
     calculator = SimilarityCalculator(
         mrc_processor=mrc_processor,
-        db_path=args.db_path,
-        voxel_size=args.voxel_size
+        db_path=args.db_path
     )
     
     # Clean the database if requested
