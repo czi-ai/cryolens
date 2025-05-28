@@ -430,7 +430,7 @@ def create_trainer(
                 
         # Configure DDP strategy with improved settings to avoid deadlocks
         ddp_kwargs = {
-            "find_unused_parameters": False,  # Set to False to avoid potential NCCL deadlocks
+            "find_unused_parameters": True,  # Set to False to avoid potential NCCL deadlocks
             "process_group_backend": "nccl",
             "timeout": timedelta(minutes=3),   # Shorter timeout to fail fast if there's a problem
             "static_graph": False,           # Disable static graph optimization which can cause issues
