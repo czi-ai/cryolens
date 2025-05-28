@@ -401,6 +401,11 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                     conv(1, 1, kernel_size=1),
                     conv(1, output_channels, kernel_size=9, padding="valid"),
                 ).to(device)
+                self._decoder2 = torch.nn.Sequential(
+                    Negate(),
+                    conv(1, 1, kernel_size=1),
+                    conv(1, output_channels, kernel_size=9, padding="valid"),
+                ).to(device)
             
     def decode_splats(
         self, z: torch.Tensor, pose: torch.Tensor
@@ -507,9 +512,10 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         self,
         z: torch.Tensor,
         pose: torch.Tensor,
+        epoch: int,
         *,
         use_final_convolution: bool = True,
-        segment_visualization: bool = False,
+        segment_visualization: bool = False, 
     ) -> Union[torch.Tensor, List[torch.Tensor]]:
         """Decode the latents to an image volume.
         
@@ -666,33 +672,41 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         else:
             # Regular path: combine all splats with appropriate pose application
             splats, weights, sigmas = self.decode_splats(z, pose)
+            if not epoch or epoch < 500:  
+                # Apply the gaussian splat renderer
+                x = self._splatter(
+                    splats, weights, sigmas, splat_sigma_range=self._splat_sigma_range
+                )
+                # Reset shape
+                self._shape = original_shape
             
-            # Apply the gaussian splat renderer
-            x = self._splatter(
-                splats, weights, sigmas, splat_sigma_range=self._splat_sigma_range
-            )
-            
-            # Reset shape
-            self._shape = original_shape
-            
-            # Apply final convolution if needed
-            if self._output_channels is not None and use_final_convolution:
-                if self.use_histogram and hasattr(self, '_decoder_init') and hasattr(self, '_decoder_final'):
-                    # Apply the initial part of the decoder
-                    x_init = self._decoder_init(x)
-                    
-                    # Compute histograms of the input volume
-                    histograms = self._compute_histograms(x, self.histogram_bins)
-                    
-                    # Concatenate initial feature with histogram features
-                    x_with_hist = torch.cat([x_init, histograms], dim=1)
-                    
-                    # Apply the final convolution with the combined features
-                    x = self._decoder_final(x_with_hist)
-                else:
-                    # Standard path without histogram
-                    x = self._decoder(x)
+                x = self._decoder(x)
+            else:
+                affinity_splats = splats[:,:,:self.affinity_n_splats]
+                free_splats = splats[:,:,self.affinity_n_splats:]
+                affinity_weights = weights[:,:self.affinity_n_splats]
+                free_weights = weights[:,self.affinity_n_splats:]
+                affinity_sigmas = weights[:,:self.affinity_n_splats]
+                free_sigmas = weights[:,self.affinity_n_splats:]
                 
+                x_affinity = self._splatter(
+                    affinity_splats, affinity_weights, affinity_sigmas, splat_sigma_range=self._splat_sigma_range
+                )
+                x_free = self._splatter(
+                    free_splats, free_weights, free_sigmas, splat_sigma_range=self._splat_sigma_range
+                )
+                # Reset shape
+                self._shape = original_shape
+                
+                x_affinity = self._decoder(x_affinity)
+                x_free = self._decoder2(x_free)
+                print(x_affinity.mean(), x_affinity.max(), x_affinity.min(), 'stats min max')
+                assert x_affinity.shape == x_free.shape, "Shape mismatch between affinity and free outputs"
+                mask = (x_affinity.abs() > 1.5).float() #inputs are zscored
+                x = x_affinity * mask + x_free * (1.0 - mask)
+        
+                
+            if self._output_channels is not None and use_final_convolution:                
                 # Calculate crop to match input shape exactly
                 total_excess = tuple(x.shape[i+2] - original_shape[i] for i in range(self._ndim))
                 crop_start = tuple(e // 2 for e in total_excess)
