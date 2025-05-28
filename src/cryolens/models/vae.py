@@ -273,7 +273,7 @@ class AffinityVAE(nn.Module):
         return device
 
     @fallback_to_cpu
-    def forward(self, x: torch.Tensor, pose: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, pose: Optional[torch.Tensor] = None, current_epoch: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through the VAE.
         
         Parameters
@@ -352,9 +352,9 @@ class AffinityVAE(nn.Module):
         # If pose is provided, ensure it's on the correct device
         if pose is not None and pose.device != device:
             actual_pose = pose.to(device)
-        
+
         decode_start = time.time()
-        x_recon = self.decode(z, actual_pose)
+        x_recon = self.decode(z, actual_pose, current_epoch)
         decode_time = time.time() - decode_start
         
         total_time = time.time() - start_time
@@ -411,7 +411,7 @@ class AffinityVAE(nn.Module):
         return mu, log_var, pose
 
     @fallback_to_cpu
-    def decode(self, z: torch.Tensor, pose: torch.Tensor) -> torch.Tensor:
+    def decode(self, z: torch.Tensor, pose: torch.Tensor, current_epoch: int) -> torch.Tensor:
         """Decode latent representation back to data space.
         
         Parameters
@@ -434,4 +434,4 @@ class AffinityVAE(nn.Module):
             pose = pose.to(device)
         
         # Now decode with everything on the same device
-        return self.decoder(z, pose)
+        return self.decoder(z, pose, current_epoch)
