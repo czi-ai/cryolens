@@ -15,7 +15,6 @@ from pathlib import Path
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
 
-from cryolens.data.random_structure_dataset import RandomSampledStructureParquetDataset
 from cryolens.data.datasets import CachedParquetDataset
 
 logger = logging.getLogger(__name__)
