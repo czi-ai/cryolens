@@ -546,11 +546,11 @@ class TomoTwinDataset(Dataset):
         return f"Loaded {len(self.structure_names)} structures with a total of {self.total_items} samples. Lookup matrix size: {matrix_size}x{matrix_size}"
     
     def __len__(self):
-        """Return the fixed epoch size rather than the actual dataset size."""
-        if self.world_size:
-            # Adjust samples per rank in distributed training
-            return self.samples_per_epoch // self.world_size
-        return self.samples_per_epoch
+        """Return the dataset size."""
+        if self.dataset is None or self.total_items == 0:
+            return 0
+        
+        return self.total_items
     
     def __getitem__(self, idx):
         """Get dataset item by random sampling.
