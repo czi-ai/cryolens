@@ -440,4 +440,4 @@ class AffinityVAE(nn.Module):
         if global_weight.device != device:
             global_weight = global_weight.to(device)
         
-        return self.decoder(z, pose, global_weight)
+        return self.decoder(z, pose, global_weight=global_weight)
