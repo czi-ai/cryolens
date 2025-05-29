@@ -54,7 +54,7 @@ class TomoTwinParquetDataset(CachedParquetDataset):
         box_size=48,
         device='cpu',
         augment=True,
-        seed=42,
+        seed=171717,
         rank=None,
         world_size=None,
         structure_name=None
@@ -211,7 +211,7 @@ class SingleStructureTomoTwinDataset(Dataset):
         snr_values=None,
         device='cpu',
         augment=True,
-        seed=42,
+        seed=171717,
         rank=None,
         world_size=None
     ):
@@ -338,7 +338,7 @@ class TomoTwinDataset(Dataset):
     augment : bool
         Whether to apply data augmentation (default: True)
     seed : int
-        Random seed (default: 42)
+        Random seed (default: 171717)
     rank : int or None
         Process rank for distributed training
     world_size : int or None
@@ -359,7 +359,7 @@ class TomoTwinDataset(Dataset):
         snr_values=None,
         device='cpu',
         augment=True,
-        seed=42,
+        seed=171717,
         rank=None,
         world_size=None,
         samples_per_epoch=2000,
@@ -602,7 +602,7 @@ class TomoTwinDataset(Dataset):
             
         # Set fixed seed for reproducible visualizations
         rng_state = random.getstate()
-        random.seed(42)  # Fixed seed for visualization
+        random.seed(171717)
         
         try:
             # Collect samples for each structure in our dataset
@@ -723,7 +723,7 @@ def create_tomotwin_dataloader(
         snr_values=snr_values,
         device='cpu',
         augment=config.augment,
-        seed=42,
+        seed=171717,
         rank=dist_config.node_rank if dist_config else None,
         world_size=dist_config.world_size if dist_config else None,
         samples_per_epoch=samples_per_epoch,
