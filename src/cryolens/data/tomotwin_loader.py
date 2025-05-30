@@ -349,6 +349,8 @@ class TomoTwinDataset(Dataset):
         Type of normalization to apply (default: "z-score")
     max_structures : int or None
         Maximum number of structures to load per node (default: None, loads all available)
+    filtered_structure_ids : list or None
+        List of specific structure IDs to load (default: None, loads all available)
     """
     
     def __init__(
@@ -364,7 +366,8 @@ class TomoTwinDataset(Dataset):
         world_size=None,
         samples_per_epoch=2000,
         normalization="z-score",
-        max_structures=None
+        max_structures=None,
+        filtered_structure_ids=None
     ):
         self.base_dir = Path(base_dir)
         self.name_to_pdb = name_to_pdb or {}
@@ -378,6 +381,7 @@ class TomoTwinDataset(Dataset):
         self.samples_per_epoch = samples_per_epoch
         self.normalization = normalization
         self.max_structures = max_structures
+        self.filtered_structure_ids = filtered_structure_ids
         
         # Set random seed with distributed awareness
         self._set_random_seed()
@@ -412,17 +416,30 @@ class TomoTwinDataset(Dataset):
             self.total_items = 0
             return
         
-        for pdb_dir in self.base_dir.iterdir():
-            if not pdb_dir.is_dir():
-                # Skip files like overall_metadata.parquet
-                continue
-                
-            # Make sure the directory is a valid PDB directory (basic check)
-            pdb_id = pdb_dir.name
-            if len(pdb_id) != 4 or not pdb_id[0].isdigit():
-                continue
-                
-            structure_dirs[pdb_id] = pdb_dir
+        # If filtered_structure_ids is provided, only use those
+        if self.filtered_structure_ids is not None:
+            rank_str = f"Rank {self.rank if self.rank is not None else 'None'}"
+            print(f"{rank_str}: Using filtered structure IDs: {self.filtered_structure_ids}")
+            
+            for pdb_id in self.filtered_structure_ids:
+                pdb_dir = self.base_dir / pdb_id
+                if pdb_dir.exists() and pdb_dir.is_dir():
+                    structure_dirs[pdb_id] = pdb_dir
+                else:
+                    logger.warning(f"Structure directory {pdb_dir} not found for PDB ID {pdb_id}")
+        else:
+            # Original logic: discover all structure directories
+            for pdb_dir in self.base_dir.iterdir():
+                if not pdb_dir.is_dir():
+                    # Skip files like overall_metadata.parquet
+                    continue
+                    
+                # Make sure the directory is a valid PDB directory (basic check)
+                pdb_id = pdb_dir.name
+                if len(pdb_id) != 4 or not pdb_id[0].isdigit():
+                    continue
+                    
+                structure_dirs[pdb_id] = pdb_dir
         
         if not structure_dirs:
             if self.rank == 0 or self.rank is None:
@@ -686,7 +703,8 @@ def create_tomotwin_dataloader(
     dist_config=None,
     samples_per_epoch=2000,
     snr_values=None,
-    max_structures=None
+    max_structures=None,
+    filtered_structure_ids=None
 ):
     """Create a DataLoader for TomoTwin data.
     
@@ -706,6 +724,8 @@ def create_tomotwin_dataloader(
         List of SNR values to include
     max_structures : int or None
         Maximum number of structures to load per node (default: None, loads all available)
+    filtered_structure_ids : list or None
+        List of specific structure IDs to load (default: None, loads all available)
         
     Returns
     -------
@@ -728,7 +748,8 @@ def create_tomotwin_dataloader(
         world_size=dist_config.world_size if dist_config else None,
         samples_per_epoch=samples_per_epoch,
         normalization="z-score",
-        max_structures=max_structures
+        max_structures=max_structures,
+        filtered_structure_ids=filtered_structure_ids
     )
     
     # Print molecular stats
