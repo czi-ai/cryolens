@@ -419,14 +419,21 @@ class TomoTwinDataset(Dataset):
         # If filtered_structure_ids is provided, only use those
         if self.filtered_structure_ids is not None:
             rank_str = f"Rank {self.rank if self.rank is not None else 'None'}"
-            print(f"{rank_str}: Using filtered structure IDs: {self.filtered_structure_ids}")
+            print(f"\n{'='*60}")
+            print(f"{rank_str}: APPLYING PDB CODE FILTERING")
+            print(f"{rank_str}: Filtered structure IDs: {self.filtered_structure_ids}")
+            print(f"{'='*60}\n")
             
             for pdb_id in self.filtered_structure_ids:
                 pdb_dir = self.base_dir / pdb_id
                 if pdb_dir.exists() and pdb_dir.is_dir():
                     structure_dirs[pdb_id] = pdb_dir
+                    print(f"{rank_str}: Found directory for PDB {pdb_id}: {pdb_dir}")
                 else:
                     logger.warning(f"Structure directory {pdb_dir} not found for PDB ID {pdb_id}")
+                    print(f"{rank_str}: WARNING - Missing directory for PDB {pdb_id}: {pdb_dir}")
+                    
+            print(f"\n{rank_str}: Final structure_dirs after filtering: {list(structure_dirs.keys())}\n")
         else:
             # Original logic: discover all structure directories
             for pdb_dir in self.base_dir.iterdir():
