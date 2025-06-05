@@ -349,6 +349,8 @@ class TomoTwinDataset(Dataset):
         Type of normalization to apply (default: "z-score")
     max_structures : int or None
         Maximum number of structures to load per node (default: None, loads all available)
+    filtered_structure_ids : list or None
+        List of specific structure IDs to load (default: None, loads all available)
     """
     
     def __init__(
@@ -364,7 +366,8 @@ class TomoTwinDataset(Dataset):
         world_size=None,
         samples_per_epoch=2000,
         normalization="z-score",
-        max_structures=None
+        max_structures=None,
+        filtered_structure_ids=None
     ):
         self.base_dir = Path(base_dir)
         self.name_to_pdb = name_to_pdb or {}
@@ -378,6 +381,7 @@ class TomoTwinDataset(Dataset):
         self.samples_per_epoch = samples_per_epoch
         self.normalization = normalization
         self.max_structures = max_structures
+        self.filtered_structure_ids = filtered_structure_ids
         
         # Set random seed with distributed awareness
         self._set_random_seed()
@@ -412,17 +416,37 @@ class TomoTwinDataset(Dataset):
             self.total_items = 0
             return
         
-        for pdb_dir in self.base_dir.iterdir():
-            if not pdb_dir.is_dir():
-                # Skip files like overall_metadata.parquet
-                continue
-                
-            # Make sure the directory is a valid PDB directory (basic check)
-            pdb_id = pdb_dir.name
-            if len(pdb_id) != 4 or not pdb_id[0].isdigit():
-                continue
-                
-            structure_dirs[pdb_id] = pdb_dir
+        # If filtered_structure_ids is provided, only use those
+        if self.filtered_structure_ids is not None:
+            rank_str = f"Rank {self.rank if self.rank is not None else 'None'}"
+            print(f"\n{'='*60}")
+            print(f"{rank_str}: APPLYING PDB CODE FILTERING")
+            print(f"{rank_str}: Filtered structure IDs: {self.filtered_structure_ids}")
+            print(f"{'='*60}\n")
+            
+            for pdb_id in self.filtered_structure_ids:
+                pdb_dir = self.base_dir / pdb_id
+                if pdb_dir.exists() and pdb_dir.is_dir():
+                    structure_dirs[pdb_id] = pdb_dir
+                    print(f"{rank_str}: Found directory for PDB {pdb_id}: {pdb_dir}")
+                else:
+                    logger.warning(f"Structure directory {pdb_dir} not found for PDB ID {pdb_id}")
+                    print(f"{rank_str}: WARNING - Missing directory for PDB {pdb_id}: {pdb_dir}")
+                    
+            print(f"\n{rank_str}: Final structure_dirs after filtering: {list(structure_dirs.keys())}\n")
+        else:
+            # Original logic: discover all structure directories
+            for pdb_dir in self.base_dir.iterdir():
+                if not pdb_dir.is_dir():
+                    # Skip files like overall_metadata.parquet
+                    continue
+                    
+                # Make sure the directory is a valid PDB directory (basic check)
+                pdb_id = pdb_dir.name
+                if len(pdb_id) != 4 or not pdb_id[0].isdigit():
+                    continue
+                    
+                structure_dirs[pdb_id] = pdb_dir
         
         if not structure_dirs:
             if self.rank == 0 or self.rank is None:
@@ -433,7 +457,11 @@ class TomoTwinDataset(Dataset):
         
         # Limit the number of structures if max_structures is specified
         # This is particularly useful for large datasets and distributed training
-        if self.max_structures is not None and self.max_structures > 0 and self.max_structures < len(structure_dirs):
+        # BUT: If filtered_structure_ids was provided, don't apply max_structures again
+        # since the filtering was already done explicitly
+        if (self.max_structures is not None and self.max_structures > 0 and 
+            self.max_structures < len(structure_dirs) and 
+            self.filtered_structure_ids is None):  # Only apply if no explicit filtering was done
             # Get all structure IDs
             all_structure_ids = list(structure_dirs.keys())
             
@@ -458,6 +486,11 @@ class TomoTwinDataset(Dataset):
             
             # Restore the random seed for other operations
             self._set_random_seed()
+        elif self.filtered_structure_ids is not None:
+            # If explicit filtering was provided, don't apply max_structures again
+            log_prefix = f"Rank {self.rank if self.rank is not None else 'None'}"
+            logger.info(f"{log_prefix}: Skipping max_structures limitation because explicit filtered_structure_ids was provided")
+            logger.info(f"{log_prefix}: Using exactly {len(structure_dirs)} explicitly filtered structures")
             
         if self.rank == 0 or self.rank is None:
             logger.info(f"Using {len(structure_dirs)} structure directories")
@@ -686,7 +719,8 @@ def create_tomotwin_dataloader(
     dist_config=None,
     samples_per_epoch=2000,
     snr_values=None,
-    max_structures=None
+    max_structures=None,
+    filtered_structure_ids=None
 ):
     """Create a DataLoader for TomoTwin data.
     
@@ -706,6 +740,8 @@ def create_tomotwin_dataloader(
         List of SNR values to include
     max_structures : int or None
         Maximum number of structures to load per node (default: None, loads all available)
+    filtered_structure_ids : list or None
+        List of specific structure IDs to load (default: None, loads all available)
         
     Returns
     -------
@@ -728,7 +764,8 @@ def create_tomotwin_dataloader(
         world_size=dist_config.world_size if dist_config else None,
         samples_per_epoch=samples_per_epoch,
         normalization="z-score",
-        max_structures=max_structures
+        max_structures=max_structures,
+        filtered_structure_ids=filtered_structure_ids
     )
     
     # Print molecular stats

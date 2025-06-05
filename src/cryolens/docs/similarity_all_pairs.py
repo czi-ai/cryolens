@@ -288,6 +288,58 @@ Chains: {structure_info.get('n_chains', 0)}"""
     plt.savefig(output_path, dpi=100, bbox_inches='tight')
     plt.close()
 
+def preprocess_unique_structures(pairs, dirs, args):
+    """Pre-process all unique structures to avoid duplicate computations."""
+    logger.info("Pre-processing unique structures to avoid duplicates...")
+    
+    # Get all unique structure IDs
+    unique_structures = set()
+    for pair in pairs:
+        unique_structures.add(pair['mol1'])
+        unique_structures.add(pair['mol2'])
+    
+    logger.info(f"Found {len(unique_structures)} unique structures")
+    
+    # Cache for storing structure data and info
+    structure_cache = {}
+    
+    for structure_id in unique_structures:
+        logger.info(f"Processing structure {structure_id}")
+        
+        # Find structure file
+        file_path, file_type = find_structure_file(dirs, structure_id)
+        
+        if not file_path:
+            logger.warning(f"Structure file not found for {structure_id}")
+            structure_cache[structure_id] = None
+            continue
+        
+        # Load structure based on file type
+        if file_type == 'mrc':
+            volume_data = load_mrc(file_path, args.box_size)
+        else:  # pdb
+            volume_data = pdb_to_density(file_path, args.box_size, args.voxel_size, args.resolution)
+        
+        if volume_data is None:
+            logger.warning(f"Failed to load volume data for {structure_id}")
+            structure_cache[structure_id] = None
+            continue
+        
+        # Get structure info for PDB files
+        structure_info = None
+        if file_type == 'pdb':
+            structure_info = get_structure_info(file_path)
+        
+        # Store in cache
+        structure_cache[structure_id] = {
+            'volume_data': volume_data,
+            'structure_info': structure_info,
+            'file_type': file_type
+        }
+    
+    logger.info(f"Successfully cached {len([v for v in structure_cache.values() if v is not None])} structures")
+    return structure_cache
+
 def main():
     parser = argparse.ArgumentParser(description="Generate markdown table with similarity pairs")
     parser.add_argument("--mrcs_dir", type=str, help="Directory containing MRC files")
@@ -325,6 +377,20 @@ def main():
         pairs = pairs[:args.max_pairs]
         logger.info(f"Limiting to {len(pairs)} pairs")
     
+    # Pre-process all unique structures to avoid duplicates
+    dirs = {'mrcs_dir': args.mrcs_dir, 'pdb_dir': args.pdb_dir}
+    structure_cache = preprocess_unique_structures(pairs, dirs, args)
+    
+    # Calculate unique images that will be created
+    unique_structures = set()
+    for pair in pairs:
+        if structure_cache.get(pair['mol1']):
+            unique_structures.add(pair['mol1'])
+        if structure_cache.get(pair['mol2']):
+            unique_structures.add(pair['mol2'])
+    
+    logger.info(f"Will create {len(unique_structures)} unique structure images (instead of {len(pairs) * 2} duplicate images)")
+    
     # Open markdown file
     markdown_path = output_dir / "similarity_pairs.md"
     with open(markdown_path, 'w') as md_file:
@@ -340,47 +406,33 @@ def main():
         md_file.write("| Structure A | Structure B | Similarity Score |\n")
         md_file.write("|-------------|-------------|------------------|\n")
         
-        # Process each pair
+        # Process each pair using cached data
         valid_pairs = 0
-        dirs = {'mrcs_dir': args.mrcs_dir, 'pdb_dir': args.pdb_dir}
         
         for pair_idx, pair in enumerate(pairs):
-            # Find structure files
-            file1_path, type1 = find_structure_file(dirs, pair['mol1'])
-            file2_path, type2 = find_structure_file(dirs, pair['mol2'])
+            # Get cached structure data
+            mol1_cache = structure_cache.get(pair['mol1'])
+            mol2_cache = structure_cache.get(pair['mol2'])
             
-            if not file1_path or not file2_path:
-                logger.warning(f"Skipping pair {pair['mol1']} vs {pair['mol2']} - structure files not found")
+            if not mol1_cache or not mol2_cache:
+                logger.warning(f"Skipping pair {pair['mol1']} vs {pair['mol2']} - cached data not available")
                 continue
             
-            # Load structures based on file type
-            if type1 == 'mrc':
-                mol1_data = load_mrc(file1_path, args.box_size)
-            else:  # pdb
-                mol1_data = pdb_to_density(file1_path, args.box_size, args.voxel_size, args.resolution)
+            mol1_data = mol1_cache['volume_data']
+            mol2_data = mol2_cache['volume_data']
+            info1 = mol1_cache['structure_info']
+            info2 = mol2_cache['structure_info']
             
-            if type2 == 'mrc':
-                mol2_data = load_mrc(file2_path, args.box_size)
-            else:  # pdb
-                mol2_data = pdb_to_density(file2_path, args.box_size, args.voxel_size, args.resolution)
+            # Create images for this pair (reusing the same image if structure appears multiple times)
+            img1_path = images_dir / f"structure_{pair['mol1']}.png"
+            img2_path = images_dir / f"structure_{pair['mol2']}.png"
             
-            if mol1_data is None or mol2_data is None:
-                continue
+            # Only create image if it doesn't exist (avoid duplicates)
+            if not img1_path.exists():
+                create_ortho_view(mol1_data, pair['mol1'], img1_path, info1, args.voxel_size)
             
-            # Get structure info for PDB files
-            info1 = None
-            info2 = None
-            if type1 == 'pdb':
-                info1 = get_structure_info(file1_path)
-            if type2 == 'pdb':
-                info2 = get_structure_info(file2_path)
-            
-            # Create images for this pair
-            img1_path = images_dir / f"pair_{pair_idx:04d}_mol1_{pair['mol1']}.png"
-            img2_path = images_dir / f"pair_{pair_idx:04d}_mol2_{pair['mol2']}.png"
-            
-            create_ortho_view(mol1_data, pair['mol1'], img1_path, info1, args.voxel_size)
-            create_ortho_view(mol2_data, pair['mol2'], img2_path, info2, args.voxel_size)
+            if not img2_path.exists():
+                create_ortho_view(mol2_data, pair['mol2'], img2_path, info2, args.voxel_size)
             
             # Add row to markdown table
             img1_rel = f"figures/{img1_path.name}"

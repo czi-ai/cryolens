@@ -193,14 +193,11 @@ class GaussianSplatDecoder(BaseDecoder):
 
         return rotated_splats, weights, sigmas
 
-    # Skip features have been removed from the implementation
-
-    # Skip features have been removed from the implementation
-
     def forward(
         self,
         z: torch.Tensor,
         pose: torch.Tensor,
+        global_weight: torch.Tensor,
         *,
         use_final_convolution: bool = True,
     ) -> torch.Tensor:
@@ -235,13 +232,19 @@ class GaussianSplatDecoder(BaseDecoder):
         # Ensure pose is on the correct device
         if pose.device != device:
             pose = pose.to(device)
+        if global_weight.device != device:
+            global_weight = global_weight.to(device)
 
         # Decode the splats from the latents and pose
         splats, weights, sigmas = self.decode_splats(z, pose)
 
-        # Apply the gaussian splat renderer
+        # Apply global weighting to splats
+        global_weight_expanded = global_weight.expand_as(weights)  # Broadcast to match weights
+        scaled_weights = weights * torch.sigmoid(global_weight_expanded)  # Apply sigmoid for 0-1 range
+        
+        # Apply the gaussian splat renderer with scaled weights
         x = self._splatter(
-            splats, weights, sigmas, splat_sigma_range=self._splat_sigma_range
+            splats, scaled_weights, sigmas, splat_sigma_range=self._splat_sigma_range
         )
 
         # Apply final convolution if needed
@@ -403,12 +406,26 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                 ).to(device)
             
     def decode_splats(
-        self, z: torch.Tensor, pose: torch.Tensor
+        self, z: torch.Tensor, pose: torch.Tensor, global_weight: Optional[torch.Tensor] = None
     ) -> tuple[torch.Tensor]:
         """Decode the splats to retrieve the coordinates, weights and sigmas from both segments.
         
         Only applies pose transformation to splats from the affinity segment.
         The free segment's splats remain static (no pose transformation).
+        
+        Parameters
+        ----------
+        z : torch.Tensor
+            Latent tensor of shape (batch_size, latent_dims)
+        pose : torch.Tensor
+            Pose tensor of shape (batch_size, 1 | 4)
+        global_weight : torch.Tensor, optional
+            Global weight tensor of shape (batch_size, 1) for amplitude scaling
+            
+        Returns
+        -------
+        tuple[torch.Tensor]
+            Tuple of (splats, weights, sigmas) tensors
         """
         if pose.shape[-1] not in (1, 4):
             raise ValueError(
@@ -429,6 +446,10 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         # Ensure pose is on the same device as z
         if pose.device != device:
             pose = pose.to(device)
+        
+        # Ensure global_weight is on the same device as z if provided
+        if global_weight is not None and global_weight.device != device:
+            global_weight = global_weight.to(device)
         
         # Split latent vector into two segments
         affinity_z = z[:, :self.affinity_segment_size]  # Regularized by affinity loss
@@ -495,18 +516,21 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         weights = torch.cat([affinity_weights, free_weights], dim=1)
         sigmas = torch.cat([affinity_sigmas, free_sigmas], dim=1)
 
+        # Apply global weight scaling if provided
+        if global_weight is not None:
+            # Apply sigmoid to ensure global_weight is in [0, 1] range
+            # Shape: (batch_size, 1) -> (batch_size, total_splats)
+            global_weight_sigmoid = torch.sigmoid(global_weight)
+            global_weight_expanded = global_weight_sigmoid.expand_as(weights)
+            weights = weights * global_weight_expanded
+
         return splats, weights, sigmas
-    
-    # Skip features have been removed from the implementation
-        
-    # Skip features have been removed from the implementation
-        
-    # Skip features have been removed from the implementation
     
     def forward(
         self,
         z: torch.Tensor,
         pose: torch.Tensor,
+        global_weight: torch.Tensor,
         *,
         use_final_convolution: bool = True,
         segment_visualization: bool = False,
@@ -519,6 +543,8 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
             An (N, D) tensor specifying the D dimensional latent encodings.
         pose : tensor
             An (N, 1 | 4) tensor specifying the pose (only applied to affinity segment).
+        global_weight : tensor
+            An (N, 1) tensor specifying global amplitude scaling for all splats.
         use_final_convolution: bool
             Whether to apply the final convolutional layers.
         segment_visualization: bool
@@ -532,9 +558,11 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                 print(f"Moving SegmentedGaussianSplatDecoder to {device} in forward()")
             self.to(device)
             
-        # Ensure pose is on the correct device
+        # Ensure pose and global_weight are on the correct device
         if pose.device != device:
             pose = pose.to(device)
+        if global_weight.device != device:
+            global_weight = global_weight.to(device)
         
         # Calculate total padding needed
         conv_padding = 4  # For the 9x9 convolution
@@ -599,9 +627,14 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
             )
             rotated_affinity_splats = rotated_affinity_splats * scale_factors.view(1, -1, 1)
             
+            # Apply global weight scaling to affinity weights
+            global_weight_sigmoid = torch.sigmoid(global_weight)
+            affinity_global_weight = global_weight_sigmoid.expand(batch_size, self.affinity_n_splats)
+            affinity_weights_scaled = affinity_weights * affinity_global_weight
+            
             # Render affinity segment
             affinity_output = self._splatter(
-                rotated_affinity_splats, affinity_weights, affinity_sigmas, 
+                rotated_affinity_splats, affinity_weights_scaled, affinity_sigmas, 
                 splat_sigma_range=self._splat_sigma_range
             )
             
@@ -616,9 +649,13 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
             # Scale for padding (free segment)
             free_splats = free_splats * scale_factors.view(1, -1, 1)
             
+            # Apply global weight scaling to free weights
+            free_global_weight = global_weight_sigmoid.expand(batch_size, self.free_n_splats)
+            free_weights_scaled = free_weights * free_global_weight
+            
             # Render free segment
             free_output = self._splatter(
-                free_splats, free_weights, free_sigmas,
+                free_splats, free_weights_scaled, free_sigmas,
                 splat_sigma_range=self._splat_sigma_range
             )
             
@@ -664,8 +701,8 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
             return segment_outputs
             
         else:
-            # Regular path: combine all splats with appropriate pose application
-            splats, weights, sigmas = self.decode_splats(z, pose)
+            # Regular path: combine all splats with appropriate pose application and global weight scaling
+            splats, weights, sigmas = self.decode_splats(z, pose, global_weight)
             
             # Apply the gaussian splat renderer
             x = self._splatter(

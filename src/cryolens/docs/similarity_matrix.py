@@ -612,6 +612,43 @@ def find_sample_by_snr(dataset, structure_idx, target_snr=10.0, snr_tolerance=1.
         logger.error(f"Error finding high SNR sample: {e}")
         return None, None
 
+# Cache for projections to avoid recomputation
+_projection_cache = {}
+
+def get_cached_projections(volume, cache_key=None):
+    """
+    Get projections for a volume, using cache to avoid recomputation.
+    
+    Args:
+        volume: 3D numpy array
+        cache_key: Optional cache key. If None, projections are computed but not cached.
+        
+    Returns:
+        Tuple of (xy_proj, xz_proj, yz_proj) normalized projections
+    """
+    # Check cache first if key provided
+    if cache_key and cache_key in _projection_cache:
+        return _projection_cache[cache_key]
+    
+    # Create average projections
+    xy_proj = np.mean(volume, axis=0)  # Average projection along z
+    xz_proj = np.mean(volume, axis=1)  # Average projection along y
+    yz_proj = np.mean(volume, axis=2)  # Average projection along x
+    
+    # Normalize projections
+    def normalize(img):
+        if img.max() == img.min():
+            return np.zeros_like(img)
+        return (img - img.min()) / (img.max() - img.min())
+    
+    projections = (normalize(xy_proj), normalize(xz_proj), normalize(yz_proj))
+    
+    # Cache if key provided
+    if cache_key:
+        _projection_cache[cache_key] = projections
+    
+    return projections
+
 def plot_structure_pair(dataset, pair_info, output_path, is_similar=True, high_snr=10.0, low_snr=1.0):
     """
     Plot a pair of structures side by side, focusing on high SNR samples.
@@ -667,23 +704,13 @@ def plot_structure_pair(dataset, pair_info, output_path, is_similar=True, high_s
         volume1 = sample1[0].numpy()  # Remove channel dimension
         volume2 = sample2[0].numpy()  # Remove channel dimension
         
-        # Create projections
-        def get_projections(volume):
-            # Create average projections
-            xy_proj = np.mean(volume, axis=0)  # Average projection along z
-            xz_proj = np.mean(volume, axis=1)  # Average projection along y
-            yz_proj = np.mean(volume, axis=2)  # Average projection along x
-            
-            # Normalize projections
-            def normalize(img):
-                if img.max() == img.min():
-                    return np.zeros_like(img)
-                return (img - img.min()) / (img.max() - img.min())
-            
-            return normalize(xy_proj), normalize(xz_proj), normalize(yz_proj)
+        # Create cache keys based on structure and sample indices
+        cache_key1 = f"{mol_id1}_{idx1}_{sample_idx1}"
+        cache_key2 = f"{mol_id2}_{idx2}_{sample_idx2}"
         
-        xy1, xz1, yz1 = get_projections(volume1)
-        xy2, xz2, yz2 = get_projections(volume2)
+        # Get projections using cache
+        xy1, xz1, yz1 = get_cached_projections(volume1, cache_key1)
+        xy2, xz2, yz2 = get_cached_projections(volume2, cache_key2)
         
         # Create figure with 2 rows (one for each structure) and 3 columns (one for each projection)
         fig, axes = plt.subplots(2, 3, figsize=(12, 8))

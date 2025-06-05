@@ -241,7 +241,7 @@ class VisualizationCallback(Callback):
                     
                     # Get standard output
                     output = pl_module(subvolume.unsqueeze(0))  # Add batch dimension
-                    reconstructed, z, generated_pose, mu, log_var = output
+                    reconstructed, z, generated_pose, global_weight, mu, log_var = output
                     
                     # Use generated pose if none returned from forward pass
                     pose = generated_pose
@@ -269,7 +269,7 @@ class VisualizationCallback(Callback):
                     try:
                         # Attempt to get segmented visualizations (should return list of two segments)
                         segment_output = pl_module.model.decoder.forward(
-                            z, pose, use_final_convolution=True, segment_visualization=True
+                            z, pose, global_weight=global_weight, use_final_convolution=True, segment_visualization=True
                         )
                         
                         segment_affinity_conv = None

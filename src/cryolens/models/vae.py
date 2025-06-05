@@ -232,6 +232,7 @@ class AffinityVAE(nn.Module):
         self.mu = nn.Linear(flat_shape, latent_dims)
         self.log_var = nn.Linear(flat_shape, latent_dims)
         self.pose = nn.Linear(flat_shape, pose_channels)
+        self.global_weight = nn.Linear(flat_shape, 1)
         self.use_rotated_affinity = use_rotated_affinity
         self.crossover_probability = crossover_probability
 
@@ -273,7 +274,7 @@ class AffinityVAE(nn.Module):
         return device
 
     @fallback_to_cpu
-    def forward(self, x: torch.Tensor, pose: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, pose: Optional[torch.Tensor] = None, global_weight: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through the VAE.
         
         Parameters
@@ -300,7 +301,7 @@ class AffinityVAE(nn.Module):
         
         if not self.use_rotated_affinity:
             # Standard forward pass without rotation
-            mu, log_var, generated_pose = self.encode(x)
+            mu, log_var, generated_pose, generated_global_weight = self.encode(x)
             encode_time = time.time() - start_time
             
             z_start = time.time()
@@ -309,7 +310,7 @@ class AffinityVAE(nn.Module):
             
         else:
             # Enhanced forward pass with rotated affinity dimensions
-            original_mu, original_log_var, generated_pose = self.encode(x)
+            original_mu, original_log_var, generated_pose, generated_global_weight = self.encode(x)
             encode_time = time.time() - start_time
             
             # Choose a random 90-degree rotation (excluding 0/360 degrees)
@@ -348,13 +349,16 @@ class AffinityVAE(nn.Module):
         
         # Use provided pose if available, otherwise use the generated pose
         actual_pose = pose if pose is not None else generated_pose
+        actual_global_weight = global_weight if global_weight is not None else generated_global_weight
         
         # If pose is provided, ensure it's on the correct device
         if pose is not None and pose.device != device:
             actual_pose = pose.to(device)
+        if global_weight is not None and global_weight.device != device:
+            actual_global_weight = global_weight.to(device)            
         
         decode_start = time.time()
-        x_recon = self.decode(z, actual_pose)
+        x_recon = self.decode(z, actual_pose, actual_global_weight)
         decode_time = time.time() - decode_start
         
         total_time = time.time() - start_time
@@ -362,7 +366,7 @@ class AffinityVAE(nn.Module):
         if rank == 0:
             print(f"Forward pass completed in {total_time:.3f}s (encode: {encode_time:.3f}s, reparam: {reparameterize_time:.3f}s, decode: {decode_time:.3f}s)")
         
-        return x_recon, z, pose, mu, log_var
+        return x_recon, z, actual_pose, actual_global_weight, mu, log_var
 
     def reparameterize(
         self, mu: torch.Tensor, log_var: torch.Tensor
@@ -386,7 +390,7 @@ class AffinityVAE(nn.Module):
         return eps * std + mu
 
     @fallback_to_cpu
-    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Encode input data to latent representation.
         
         Parameters
@@ -396,22 +400,21 @@ class AffinityVAE(nn.Module):
             
         Returns
         -------
-        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
             Mean, log variance, and pose.
         """
-        # Ensure components are on the same device as input
-        self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose)
+        self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose, self.global_weight)
         
-        # Process with all components on the same device
         encoded = self.encoder(x)
         mu = self.mu(encoded)
         log_var = self.log_var(encoded)
         pose = self.pose(encoded)
+        global_weight = self.global_weight(encoded)
         
-        return mu, log_var, pose
+        return mu, log_var, pose, global_weight
 
     @fallback_to_cpu
-    def decode(self, z: torch.Tensor, pose: torch.Tensor) -> torch.Tensor:
+    def decode(self, z: torch.Tensor, pose: torch.Tensor, global_weight: torch.Tensor) -> torch.Tensor:
         """Decode latent representation back to data space.
         
         Parameters
@@ -420,6 +423,8 @@ class AffinityVAE(nn.Module):
             Latent representation.
         pose : torch.Tensor
             Pose tensor.
+        global_weight : torch.Tensor            
+            Splat weight
             
         Returns
         -------
@@ -432,6 +437,7 @@ class AffinityVAE(nn.Module):
         # If pose is on a different device, move it
         if pose.device != device:
             pose = pose.to(device)
+        if global_weight.device != device:
+            global_weight = global_weight.to(device)
         
-        # Now decode with everything on the same device
-        return self.decoder(z, pose)
+        return self.decoder(z, pose, global_weight=global_weight)
