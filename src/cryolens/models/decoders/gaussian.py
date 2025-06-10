@@ -683,14 +683,21 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                     free_output = self._decoder(free_output)
                 
                 # Calculate crop to match input shape exactly
-                total_excess = tuple(affinity_output.shape[i+2] - original_shape[i] for i in range(self._ndim))
-                crop_start = tuple(e // 2 for e in total_excess)
-                crop_end = tuple(s + e//2 for s, e in zip(original_shape, total_excess))
+                # The convolution output includes padding from both rendering and convolution
+                affinity_spatial_shape = affinity_output.shape[2:]
+                free_spatial_shape = free_output.shape[2:]
                 
-                # Crop to original shape precisely
-                slices = tuple(slice(s, e) for s, e in zip(crop_start, crop_end))
-                affinity_output = affinity_output[(slice(None), slice(None)) + slices]
-                free_output = free_output[(slice(None), slice(None)) + slices]
+                # Calculate cropping for affinity output
+                affinity_crop_start = tuple((s - t) // 2 for s, t in zip(affinity_spatial_shape, original_shape))
+                affinity_crop_end = tuple(start + size for start, size in zip(affinity_crop_start, original_shape))
+                affinity_slices = tuple(slice(start, end) for start, end in zip(affinity_crop_start, affinity_crop_end))
+                affinity_output = affinity_output[(slice(None), slice(None)) + affinity_slices]
+                
+                # Calculate cropping for free output
+                free_crop_start = tuple((s - t) // 2 for s, t in zip(free_spatial_shape, original_shape))
+                free_crop_end = tuple(start + size for start, size in zip(free_crop_start, original_shape))
+                free_slices = tuple(slice(start, end) for start, end in zip(free_crop_start, free_crop_end))
+                free_output = free_output[(slice(None), slice(None)) + free_slices]
                 
                 # Verify output shape
                 expected_shape = (affinity_output.shape[0], self._output_channels) + original_shape
@@ -731,12 +738,13 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                     x = self._decoder(x)
                 
                 # Calculate crop to match input shape exactly
-                total_excess = tuple(x.shape[i+2] - original_shape[i] for i in range(self._ndim))
-                crop_start = tuple(e // 2 for e in total_excess)
-                crop_end = tuple(s + e//2 for s, e in zip(original_shape, total_excess))
+                # The convolution output includes padding from both rendering and convolution
+                spatial_shape = x.shape[2:]
                 
-                # Crop to original shape precisely
-                slices = tuple(slice(s, e) for s, e in zip(crop_start, crop_end))
+                # Calculate cropping to center the result
+                crop_start = tuple((s - t) // 2 for s, t in zip(spatial_shape, original_shape))
+                crop_end = tuple(start + size for start, size in zip(crop_start, original_shape))
+                slices = tuple(slice(start, end) for start, end in zip(crop_start, crop_end))
                 x = x[(slice(None), slice(None)) + slices]
                 
                 # Verify output shape
