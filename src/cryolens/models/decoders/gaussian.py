@@ -333,41 +333,53 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                 
         # Create separate networks for the two segments
         
-        # Networks for affinity-regularized segment
+        # Networks for affinity-regularized segment - 3 layers each
         self.affinity_centroids = nn.Sequential(
-            nn.Linear(self.affinity_segment_size, self.affinity_n_splats * 3),
+            nn.Linear(self.affinity_segment_size, self.affinity_n_splats * 4),
+            nn.ReLU(),
+            nn.Linear(self.affinity_n_splats * 4, self.affinity_n_splats * 3),
             nn.ReLU(),
             nn.Linear(self.affinity_n_splats * 3, self.affinity_n_splats * 3),
             nn.Tanh(),
         ).to(device)
         
         self.affinity_weights = nn.Sequential(
-            nn.Linear(self.affinity_segment_size, self.affinity_n_splats),
+            nn.Linear(self.affinity_segment_size, self.affinity_n_splats * 2),
+            nn.ReLU(),
+            nn.Linear(self.affinity_n_splats * 2, self.affinity_n_splats),
             nn.Tanh(),
             SoftStep(k=10.0),
         ).to(device)
         
         self.affinity_sigmas = nn.Sequential(
-            nn.Linear(self.affinity_segment_size, self.affinity_n_splats),
+            nn.Linear(self.affinity_segment_size, self.affinity_n_splats * 2),
+            nn.ReLU(),
+            nn.Linear(self.affinity_n_splats * 2, self.affinity_n_splats),
             nn.Sigmoid(),
         ).to(device)
         
-        # Networks for free segment
+        # Networks for free segment - 3 layers each
         self.free_centroids = nn.Sequential(
-            nn.Linear(self.free_segment_size, self.free_n_splats * 3),
+            nn.Linear(self.free_segment_size, self.free_n_splats * 4),
+            nn.ReLU(),
+            nn.Linear(self.free_n_splats * 4, self.free_n_splats * 3),
             nn.ReLU(),
             nn.Linear(self.free_n_splats * 3, self.free_n_splats * 3),
             nn.Tanh(),
         ).to(device)
         
         self.free_weights = nn.Sequential(
-            nn.Linear(self.free_segment_size, self.free_n_splats),
+            nn.Linear(self.free_segment_size, self.free_n_splats * 2),
+            nn.ReLU(),
+            nn.Linear(self.free_n_splats * 2, self.free_n_splats),
             nn.Tanh(),
             SoftStep(k=10.0),
         ).to(device)
         
         self.free_sigmas = nn.Sequential(
-            nn.Linear(self.free_segment_size, self.free_n_splats),
+            nn.Linear(self.free_segment_size, self.free_n_splats * 2),
+            nn.ReLU(),
+            nn.Linear(self.free_n_splats * 2, self.free_n_splats),
             nn.Sigmoid(),
         ).to(device)
             
