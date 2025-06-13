@@ -73,12 +73,16 @@ class MinimalCheckpoint(ModelCheckpoint):
             # Create checkpoint dir if it doesn't exist
             os.makedirs(self.dirpath, exist_ok=True)
             
-            # Create checkpoint dict
+            # Create checkpoint dict with PyTorch Lightning metadata
+            import pytorch_lightning as pl
             checkpoint = {
                 'state_dict': pl_module.state_dict(),
                 'epoch': trainer.current_epoch,
                 'global_step': trainer.global_step,
-                'optimizer_state': trainer.optimizers[0].state_dict() if trainer.optimizers else None,
+                'pytorch-lightning_version': pl.__version__,
+                'optimizer_states': [opt.state_dict() for opt in trainer.optimizers] if trainer.optimizers else [],
+                'lr_schedulers': [scheduler['scheduler'].state_dict() for scheduler in trainer.lr_scheduler_configs] if trainer.lr_scheduler_configs else [],
+                'hyper_parameters': pl_module.hparams if hasattr(pl_module, 'hparams') else {},
             }
             
             # Generate base filename without extension
