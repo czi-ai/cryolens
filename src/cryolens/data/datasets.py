@@ -33,6 +33,8 @@ class CachedParquetDataset(Dataset):
         Process rank in distributed setup.
     world_size : int, optional
         Total number of processes in distributed setup.
+    augment_config : dict, optional
+        Configuration for augmentation parameters.
     """
     
     def __init__(
@@ -44,7 +46,8 @@ class CachedParquetDataset(Dataset):
         augment=True,
         seed=42,
         rank=None,
-        world_size=None
+        world_size=None,
+        augment_config=None
     ):
         # Debug log
         rank_str = f"Rank {rank if rank is not None else 'None'}"
@@ -58,6 +61,17 @@ class CachedParquetDataset(Dataset):
         self.seed = seed
         self.rank = rank
         self.world_size = world_size
+        
+        # Set default augmentation configuration
+        default_augment_config = {
+            'rotation_prob': 0.5,
+            'noise_prob': 0.7,
+            'contrast_prob': 0.7,
+            'noise_std_range': (0.05, 0.2),
+            'contrast_range': (0.7, 1.3),
+            'brightness_range': (-0.1, 0.1)
+        }
+        self.augment_config = {**default_augment_config, **(augment_config or {})}
         
         # Check if file exists
         print(f"{rank_str}: DEADLOCK_DEBUG - Checking if file exists: {self.parquet_path}")
@@ -329,23 +343,26 @@ class CachedParquetDataset(Dataset):
         
         # Random rotation only in xy plane (around z-axis)
         # This preserves the orientation relative to the ice surface
-        if np.random.random() > 0.5:
+        if np.random.random() < self.augment_config['rotation_prob']:
             k = np.random.randint(1, 4)  # 90, 180, or 270 degrees
             volume = np.rot90(volume, k=k, axes=(0, 1))  # Only rotate in xy plane
             volume = np.ascontiguousarray(volume)
             
         # Add Gaussian noise to simulate imaging noise
-        if np.random.random() > 0.3:  # Apply noise 70% of the time
-            noise_std = np.random.uniform(0.05, 0.2) * np.std(volume)
+        if np.random.random() < self.augment_config['noise_prob']:
+            noise_std_min, noise_std_max = self.augment_config['noise_std_range']
+            noise_std = np.random.uniform(noise_std_min, noise_std_max) * np.std(volume)
             noise = np.random.normal(0, noise_std, volume.shape)
             volume = volume + noise
             
         # Contrast adjustment to simulate varying imaging conditions
-        if np.random.random() > 0.3:  # Apply contrast adjustment 70% of the time
-            # Random contrast factor between 0.7 and 1.3
-            contrast_factor = np.random.uniform(0.7, 1.3)
+        if np.random.random() < self.augment_config['contrast_prob']:
+            # Random contrast factor
+            contrast_min, contrast_max = self.augment_config['contrast_range']
+            contrast_factor = np.random.uniform(contrast_min, contrast_max)
             # Random brightness offset
-            brightness_offset = np.random.uniform(-0.1, 0.1) * np.std(volume)
+            brightness_min, brightness_max = self.augment_config['brightness_range']
+            brightness_offset = np.random.uniform(brightness_min, brightness_max) * np.std(volume)
             
             # Apply contrast and brightness
             mean_val = np.mean(volume)
@@ -382,6 +399,8 @@ class CurriculumParquetDataset(Dataset):
     normalization: str, optional
         Normalization method to use (default: "z-score").
         Options: "z-score", "min-max", "percentile", "none"
+    augment_config : dict, optional
+        Configuration for augmentation parameters.
     """
     
     def __init__(
@@ -396,7 +415,8 @@ class CurriculumParquetDataset(Dataset):
         seed=42,
         rank=None,
         world_size=None,
-        normalization="z-score"
+        normalization="z-score",
+        augment_config=None
     ):
         self.parquet_paths = [Path(p) for p in parquet_paths]
         self.name_to_pdb = name_to_pdb or {}
@@ -409,6 +429,17 @@ class CurriculumParquetDataset(Dataset):
         self.rank = rank
         self.world_size = world_size
         self.normalization = normalization
+        
+        # Set default augmentation configuration
+        default_augment_config = {
+            'rotation_prob': 0.5,
+            'noise_prob': 0.7,
+            'contrast_prob': 0.7,
+            'noise_std_range': (0.05, 0.2),
+            'contrast_range': (0.7, 1.3),
+            'brightness_range': (-0.1, 0.1)
+        }
+        self.augment_config = {**default_augment_config, **(augment_config or {})}
         
         # Set current epoch and stage
         self.current_epoch = 0
@@ -1094,23 +1125,26 @@ class CurriculumParquetDataset(Dataset):
         
         # Random rotation only in xy plane (around z-axis)
         # This preserves the orientation relative to the ice surface
-        if np.random.random() > 0.5:
+        if np.random.random() < self.augment_config['rotation_prob']:
             k = np.random.randint(1, 4)  # 90, 180, or 270 degrees
             volume = np.rot90(volume, k=k, axes=(0, 1))  # Only rotate in xy plane
             volume = np.ascontiguousarray(volume)
             
         # Add Gaussian noise to simulate imaging noise
-        if np.random.random() > 0.3:  # Apply noise 70% of the time
-            noise_std = np.random.uniform(0.05, 0.2) * np.std(volume)
+        if np.random.random() < self.augment_config['noise_prob']:
+            noise_std_min, noise_std_max = self.augment_config['noise_std_range']
+            noise_std = np.random.uniform(noise_std_min, noise_std_max) * np.std(volume)
             noise = np.random.normal(0, noise_std, volume.shape)
             volume = volume + noise
             
         # Contrast adjustment to simulate varying imaging conditions
-        if np.random.random() > 0.3:  # Apply contrast adjustment 70% of the time
-            # Random contrast factor between 0.7 and 1.3
-            contrast_factor = np.random.uniform(0.7, 1.3)
+        if np.random.random() < self.augment_config['contrast_prob']:
+            # Random contrast factor
+            contrast_min, contrast_max = self.augment_config['contrast_range']
+            contrast_factor = np.random.uniform(contrast_min, contrast_max)
             # Random brightness offset
-            brightness_offset = np.random.uniform(-0.1, 0.1) * np.std(volume)
+            brightness_min, brightness_max = self.augment_config['brightness_range']
+            brightness_offset = np.random.uniform(brightness_min, brightness_max) * np.std(volume)
             
             # Apply contrast and brightness
             mean_val = np.mean(volume)
