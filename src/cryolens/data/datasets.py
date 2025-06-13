@@ -302,7 +302,14 @@ class CachedParquetDataset(Dataset):
         return normalized
     
     def _augment_volume(self, volume):
-        """Apply random augmentations to volume.
+        """Apply random augmentations to volume suitable for cryo-ET data.
+        
+        For cryo-ET subtomograms:
+        - Rotations are only applied in the xy plane (around z-axis) to preserve
+          the orientation relative to the ice surface
+        - No flips are applied to preserve molecular handedness
+        - Gaussian noise is added to simulate imaging noise
+        - Contrast adjustments simulate varying imaging conditions
         
         Parameters
         ----------
@@ -320,19 +327,29 @@ class CachedParquetDataset(Dataset):
         # Make a contiguous copy to avoid stride issues
         volume = np.ascontiguousarray(volume)
         
-        # Random rotation
+        # Random rotation only in xy plane (around z-axis)
+        # This preserves the orientation relative to the ice surface
         if np.random.random() > 0.5:
-            k = np.random.randint(1, 4)
-            axes = tuple(np.random.choice([0, 1, 2], size=2, replace=False))
-            volume = np.rot90(volume, k=k, axes=axes)
-            # Ensure contiguous memory layout after rotation
+            k = np.random.randint(1, 4)  # 90, 180, or 270 degrees
+            volume = np.rot90(volume, k=k, axes=(0, 1))  # Only rotate in xy plane
             volume = np.ascontiguousarray(volume)
             
-        # Random flips
-        for axis in range(3):
-            if np.random.random() > 0.5:
-                # Always make a copy to avoid negative strides
-                volume = np.ascontiguousarray(np.flip(volume, axis=axis))
+        # Add Gaussian noise to simulate imaging noise
+        if np.random.random() > 0.3:  # Apply noise 70% of the time
+            noise_std = np.random.uniform(0.05, 0.2) * np.std(volume)
+            noise = np.random.normal(0, noise_std, volume.shape)
+            volume = volume + noise
+            
+        # Contrast adjustment to simulate varying imaging conditions
+        if np.random.random() > 0.3:  # Apply contrast adjustment 70% of the time
+            # Random contrast factor between 0.7 and 1.3
+            contrast_factor = np.random.uniform(0.7, 1.3)
+            # Random brightness offset
+            brightness_offset = np.random.uniform(-0.1, 0.1) * np.std(volume)
+            
+            # Apply contrast and brightness
+            mean_val = np.mean(volume)
+            volume = contrast_factor * (volume - mean_val) + mean_val + brightness_offset
                 
         return volume
 
@@ -1050,7 +1067,14 @@ class CurriculumParquetDataset(Dataset):
             return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long)
 
     def _augment_volume(self, volume):
-        """Apply data augmentation to 3D volume with multiple transforms.
+        """Apply data augmentation to 3D volume suitable for cryo-ET data.
+        
+        For cryo-ET subtomograms:
+        - Rotations are only applied in the xy plane (around z-axis) to preserve
+          the orientation relative to the ice surface
+        - No flips are applied to preserve molecular handedness
+        - Gaussian noise is added to simulate imaging noise
+        - Contrast adjustments simulate varying imaging conditions
         
         Parameters
         ----------
@@ -1068,18 +1092,28 @@ class CurriculumParquetDataset(Dataset):
         # Make a contiguous copy to avoid stride issues
         volume = np.ascontiguousarray(volume)
         
-        # Random rotation
+        # Random rotation only in xy plane (around z-axis)
+        # This preserves the orientation relative to the ice surface
         if np.random.random() > 0.5:
-            k = np.random.randint(1, 4)
-            axes = tuple(np.random.choice([0, 1, 2], size=2, replace=False))
-            volume = np.rot90(volume, k=k, axes=axes)
-            # Ensure contiguous memory layout after rotation
+            k = np.random.randint(1, 4)  # 90, 180, or 270 degrees
+            volume = np.rot90(volume, k=k, axes=(0, 1))  # Only rotate in xy plane
             volume = np.ascontiguousarray(volume)
             
-        # Random flips
-        for axis in range(3):
-            if np.random.random() > 0.5:
-                # Always use ascontiguousarray instead of copy to ensure positive strides
-                volume = np.ascontiguousarray(np.flip(volume, axis=axis))
+        # Add Gaussian noise to simulate imaging noise
+        if np.random.random() > 0.3:  # Apply noise 70% of the time
+            noise_std = np.random.uniform(0.05, 0.2) * np.std(volume)
+            noise = np.random.normal(0, noise_std, volume.shape)
+            volume = volume + noise
+            
+        # Contrast adjustment to simulate varying imaging conditions
+        if np.random.random() > 0.3:  # Apply contrast adjustment 70% of the time
+            # Random contrast factor between 0.7 and 1.3
+            contrast_factor = np.random.uniform(0.7, 1.3)
+            # Random brightness offset
+            brightness_offset = np.random.uniform(-0.1, 0.1) * np.std(volume)
+            
+            # Apply contrast and brightness
+            mean_val = np.mean(volume)
+            volume = contrast_factor * (volume - mean_val) + mean_val + brightness_offset
                 
         return volume
