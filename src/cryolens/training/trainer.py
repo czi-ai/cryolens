@@ -410,24 +410,41 @@ def create_trainer(
     if dist_config:
         # Add verbose logging for distributed setup
         print(f"Rank {rank}:{local_rank}: Configuring distributed training with {dist_config.world_size} processes")
+        print(f"Rank {rank}:{local_rank}: Distributed config - world_size: {dist_config.world_size}, num_nodes: {dist_config.num_nodes}, devices_per_node: {dist_config.devices_per_node}")
         
-        # Set explicit CUDA device
+        # CRITICAL FIX: Properly configure devices and num_nodes for PyTorch Lightning
         if trainer_kwargs['accelerator'] == 'gpu':
             device_count = torch.cuda.device_count()
             
-            # Important: Configuration for PyTorch Lightning DDP strategy:
-            # For DDP, we need to set devices to list of device indices instead of a single [local_rank]
-            # which caused index out of range errors. By using all GPUs PyTorch Lightning will handle mapping.
+            # Set devices per node (this is what Lightning expects)
+            trainer_kwargs['devices'] = dist_config.devices_per_node
             
-            # If local_rank is out of range, use device 0 to prevent index errors
-            if local_rank >= device_count:
-                print(f"WARNING: Rank {rank}:{local_rank}: local_rank exceeds device count, using device 0 instead!")
-                torch.cuda.set_device(0)  # Fall back to device 0
-                trainer_kwargs['devices'] = list(range(device_count))
-            else:
-                trainer_kwargs['devices'] = list(range(device_count))
+            # CRITICAL: num_nodes must match the actual number of nodes
+            trainer_kwargs['num_nodes'] = dist_config.num_nodes
+            
+            print(f"Rank {rank}:{local_rank}: Lightning config - devices per node: {trainer_kwargs['devices']}, num_nodes: {trainer_kwargs['num_nodes']}")
+            print(f"Rank {rank}:{local_rank}: Expected total processes: {trainer_kwargs['devices'] * trainer_kwargs['num_nodes']} vs actual world_size: {dist_config.world_size}")
+            
+            # Validation check
+            expected_processes = trainer_kwargs['devices'] * trainer_kwargs['num_nodes']
+            if expected_processes != dist_config.world_size:
+                print(f"ERROR: Lightning configuration mismatch!")
+                print(f"  devices * num_nodes = {trainer_kwargs['devices']} * {trainer_kwargs['num_nodes']} = {expected_processes}")
+                print(f"  but world_size = {dist_config.world_size}")
                 
-            print(f"Rank {rank}:{local_rank}: Setting GPU devices to use: {trainer_kwargs['devices']}")
+                # Try to fix the configuration automatically
+                if dist_config.world_size % device_count == 0:
+                    # Calculate correct number of nodes
+                    correct_num_nodes = dist_config.world_size // device_count
+                    print(f"Auto-correcting: setting num_nodes to {correct_num_nodes}")
+                    trainer_kwargs['num_nodes'] = correct_num_nodes
+                    trainer_kwargs['devices'] = device_count
+                else:
+                    print(f"Cannot auto-correct. World size {dist_config.world_size} is not evenly divisible by device count {device_count}")
+                    # Fall back to single node mode
+                    print(f"Falling back to single node mode with {dist_config.world_size} devices")
+                    trainer_kwargs['devices'] = dist_config.world_size
+                    trainer_kwargs['num_nodes'] = 1
         
         # Create a modified PyTorch DDP strategy optimized for reliable training
         print(f"Rank {rank}:{local_rank}: Creating DDP strategy")
@@ -446,11 +463,14 @@ def create_trainer(
         
         trainer_kwargs.update({
             "strategy": DDPStrategy(**ddp_kwargs),
-            "num_nodes": dist_config.num_nodes,
             "plugins": [cluster_env]
         })
         
-        print(f"Rank {rank}:{local_rank}: Final trainer config for distributed: {trainer_kwargs}")
+        print(f"Rank {rank}:{local_rank}: Final trainer config for distributed:")
+        print(f"  devices: {trainer_kwargs['devices']}")
+        print(f"  num_nodes: {trainer_kwargs['num_nodes']}")
+        print(f"  strategy: DDP")
+        print(f"  world_size: {dist_config.world_size}")
     else:
         print(f"Rank {rank}:{local_rank}: Running in single-GPU mode")
     
