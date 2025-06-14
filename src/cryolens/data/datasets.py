@@ -432,7 +432,7 @@ class CurriculumParquetDataset(Dataset):
         
         # Set default augmentation configuration
         default_augment_config = {
-            'rotation_prob': 0.5,
+            'rotation_prob': 0,
             'noise_prob': 0.7,
             'contrast_prob': 0.7,
             'noise_std_range': (0.05, 0.2),
