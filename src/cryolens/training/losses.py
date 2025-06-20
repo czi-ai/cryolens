@@ -165,6 +165,37 @@ class ContrastiveAffinityLoss(nn.Module):
             return zero_tensor.requires_grad_()
 
 
+class NormalizedMSELoss(nn.Module):
+    """MSE loss normalized by the size of the subvolume.
+    
+    This ensures that the loss magnitude is consistent regardless of volume size,
+    making it comparable to other losses and preventing gradient explosion.
+    """
+    def __init__(self, volume_size: int):
+        super().__init__()
+        self.volume_size = volume_size
+        self.normalization_factor = volume_size ** 3
+        
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Compute normalized MSE loss.
+        
+        Args:
+            pred: Predicted volume (B, 1, D, H, W)
+            target: Target volume (B, 1, D, H, W)
+            
+        Returns:
+            Normalized MSE loss
+        """
+        # Compute squared error
+        squared_error = (pred - target) ** 2
+        
+        # Sum over spatial dimensions and normalize by volume size
+        # This gives us the mean squared error per voxel
+        loss = squared_error.sum() / (squared_error.shape[0] * self.normalization_factor)
+        
+        return loss
+
+
 class MissingWedgeLoss(nn.Module):
     """
     Improved reconstruction loss that accounts for missing wedge artifacts in cryo-ET data.
