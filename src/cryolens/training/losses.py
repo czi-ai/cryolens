@@ -170,11 +170,14 @@ class NormalizedMSELoss(nn.Module):
     
     This ensures that the loss magnitude is consistent regardless of volume size,
     making it comparable to other losses and preventing gradient explosion.
+    The normalization divides by the total number of voxels (volume_size^3) to
+    get the mean squared error per voxel, which is scale-invariant.
     """
     def __init__(self, volume_size: int):
         super().__init__()
         self.volume_size = volume_size
         self.normalization_factor = volume_size ** 3
+        print(f"NormalizedMSELoss initialized with volume_size={volume_size}, normalization_factor={self.normalization_factor}")
         
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Compute normalized MSE loss.
