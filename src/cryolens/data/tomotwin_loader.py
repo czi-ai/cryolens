@@ -152,12 +152,15 @@ class StructureDataWrapper(Dataset):
         Name of the structure (PDB ID)
     molecule_to_idx : dict
         Global mapping from molecule names to indices
+    external_molecule_order : list, optional
+        External ordering of molecules to use for consistent indexing
     """
     
-    def __init__(self, dataset, structure_name, molecule_to_idx):
+    def __init__(self, dataset, structure_name, molecule_to_idx, external_molecule_order=None):
         self.dataset = dataset
         self.structure_name = structure_name
         self.molecule_to_idx = molecule_to_idx
+        self.external_molecule_order = external_molecule_order
     
     def __len__(self):
         return len(self.dataset)
@@ -167,8 +170,16 @@ class StructureDataWrapper(Dataset):
         # Get the original item
         volume, _ = self.dataset[idx]
         
-        # Use the global molecule_to_idx mapping for this structure
-        molecule_idx = self.molecule_to_idx.get(self.structure_name, -1)
+        # If external molecule order is provided, use it for indexing
+        if self.external_molecule_order is not None:
+            try:
+                molecule_idx = self.external_molecule_order.index(self.structure_name)
+            except ValueError:
+                # Structure not in external order, use -1 (background)
+                molecule_idx = -1
+        else:
+            # Use the local molecule_to_idx mapping for this structure
+            molecule_idx = self.molecule_to_idx.get(self.structure_name, -1)
         
         return volume, torch.tensor(molecule_idx, dtype=torch.long)
 
