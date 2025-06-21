@@ -378,7 +378,8 @@ class TomoTwinDataset(Dataset):
         samples_per_epoch=2000,
         normalization="z-score",
         max_structures=None,
-        filtered_structure_ids=None
+        filtered_structure_ids=None,
+        external_molecule_order=None
     ):
         self.base_dir = Path(base_dir)
         self.name_to_pdb = name_to_pdb or {}
