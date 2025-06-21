@@ -394,6 +394,7 @@ class TomoTwinDataset(Dataset):
         self.normalization = normalization
         self.max_structures = max_structures
         self.filtered_structure_ids = filtered_structure_ids
+        self.external_molecule_order = external_molecule_order
         
         # Set random seed with distributed awareness
         self._set_random_seed()
