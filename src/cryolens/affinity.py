@@ -17,18 +17,47 @@ class SimilarityCalculator:
         if not structure_ids:
             raise ValueError("No structure IDs provided")
             
-        structure_ids = [sid.lower() for sid in structure_ids]
+        # Don't convert to lowercase here - preserve original case
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         print(f"Loading matrix for {structure_ids}")
         
         try:
+            # First, get the actual case for each structure ID from the database
+            # This handles mixed case databases
+            placeholders = ','.join(['?'] * len(structure_ids))
+            cursor.execute(f"""
+                SELECT DISTINCT molecule_id 
+                FROM features 
+                WHERE LOWER(molecule_id) IN ({placeholders})
+            """, [sid.lower() for sid in structure_ids])
+            
+            # Create a mapping from lowercase to actual case in DB
+            db_molecules = {row[0].lower(): row[0] for row in cursor.fetchall()}
+            
+            # Map our input IDs to the actual case in the database
+            actual_structure_ids = []
+            missing_in_db = []
+            for sid in structure_ids:
+                sid_lower = sid.lower()
+                if sid_lower in db_molecules:
+                    actual_structure_ids.append(db_molecules[sid_lower])
+                else:
+                    missing_in_db.append(sid)
+            
+            if missing_in_db:
+                print(f"Warning: The following structure IDs were not found in the database: {missing_in_db}")
+                print(f"Continuing with {len(actual_structure_ids)} structures found in database")
+            
+            if not actual_structure_ids:
+                raise ValueError("None of the provided structure IDs were found in the database")
+            
             # Create a N x N matrix for the specified structures
-            n = len(structure_ids)
+            n = len(actual_structure_ids)
             matrix = np.zeros((n, n), dtype=np.float32)
             
-            # Fetch all pairwise affinities for these structures
-            placeholders = ','.join(['?'] * len(structure_ids))
+            # Fetch all pairwise affinities for these structures using actual case
+            placeholders = ','.join(['?'] * len(actual_structure_ids))
             query = f"""
             SELECT 
                 molecule_id1,
@@ -37,11 +66,11 @@ class SimilarityCalculator:
             FROM affinities 
             WHERE (molecule_id1 IN ({placeholders}) AND molecule_id2 IN ({placeholders}))
             """
-            cursor.execute(query, structure_ids + structure_ids)
+            cursor.execute(query, actual_structure_ids + actual_structure_ids)
             rows = cursor.fetchall()
             
             # Build matrix from pairwise values
-            id_to_idx = {sid: idx for idx, sid in enumerate(structure_ids)}
+            id_to_idx = {sid: idx for idx, sid in enumerate(actual_structure_ids)}
             for mol1, mol2, value in rows:
                 # Only include if both molecules are in our structure list
                 if mol1 in id_to_idx and mol2 in id_to_idx:
@@ -54,7 +83,7 @@ class SimilarityCalculator:
             np.fill_diagonal(matrix, 1.0)
             
             # Handle background structures - make their rows negative except diagonal
-            for idx, struct_id in enumerate(structure_ids):
+            for idx, struct_id in enumerate(actual_structure_ids):
                 if 'background' in struct_id.lower():
                     # Make entire row negative except diagonal
                     matrix[idx, :] = -np.abs(matrix[idx, :])
@@ -62,8 +91,8 @@ class SimilarityCalculator:
             
             # Verify we have all needed similarities
             missing = []
-            for i, mol1 in enumerate(structure_ids):
-                for j, mol2 in enumerate(structure_ids[i+1:], i+1):  # Only check upper triangle
+            for i, mol1 in enumerate(actual_structure_ids):
+                for j, mol2 in enumerate(actual_structure_ids[i+1:], i+1):  # Only check upper triangle
                     if matrix[i, j] == 0:
                         missing.append((mol1, mol2))
                         
@@ -80,7 +109,7 @@ class SimilarityCalculator:
                 breakpoint()
                 raise ValueError(f"Missing similarity values for pairs: {missing_pairs}{extra}")
             
-            print(f"\nSimilarity Matrix molecules: {structure_ids}")
+            print(f"\nSimilarity Matrix molecules: {actual_structure_ids}")
             
             # Global normalization of off-diagonal elements
             # Create a mask for off-diagonal elements
@@ -110,10 +139,11 @@ class SimilarityCalculator:
                 # Ensure the diagonal remains at 1.0
                 np.fill_diagonal(normalized_matrix, 1.0)
                 
-                return normalized_matrix, structure_ids
+                # Return with the actual structure IDs as they appear in the database
+                return normalized_matrix, actual_structure_ids
             else:
                 print("No normalization applied due to small range of similarity values")
-                return matrix, structure_ids
+                return matrix, actual_structure_ids
             
         finally:
             conn.close()
