@@ -733,7 +733,8 @@ def create_tomotwin_dataloader(
     samples_per_epoch=2000,
     snr_values=None,
     max_structures=None,
-    filtered_structure_ids=None
+    filtered_structure_ids=None,
+    external_molecule_order=None
 ):
     """Create a DataLoader for TomoTwin data.
     
