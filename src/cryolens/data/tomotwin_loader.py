@@ -756,6 +756,8 @@ def create_tomotwin_dataloader(
         Maximum number of structures to load per node (default: None, loads all available)
     filtered_structure_ids : list or None
         List of specific structure IDs to load (default: None, loads all available)
+    external_molecule_order : list or None
+        External ordering of molecules for consistent indexing with similarity matrix
         
     Returns
     -------
