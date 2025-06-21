@@ -555,7 +555,7 @@ class TomoTwinDataset(Dataset):
         wrapped_datasets = []
         for i, dataset in enumerate(structure_datasets):
             struct_name = valid_structure_names[i]
-            wrapped = StructureDataWrapper(dataset, struct_name, self.molecule_to_idx)
+            wrapped = StructureDataWrapper(dataset, struct_name, self.molecule_to_idx, self.external_molecule_order)
             wrapped_datasets.append(wrapped)
             
         # Combine datasets using ConcatDataset or create an empty dataset
