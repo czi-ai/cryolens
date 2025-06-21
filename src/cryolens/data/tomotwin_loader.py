@@ -781,7 +781,8 @@ def create_tomotwin_dataloader(
         samples_per_epoch=samples_per_epoch,
         normalization="z-score",
         max_structures=max_structures,
-        filtered_structure_ids=filtered_structure_ids
+        filtered_structure_ids=filtered_structure_ids,
+        external_molecule_order=external_molecule_order
     )
     
     # Print molecular stats
