@@ -309,11 +309,6 @@ class ContrastiveAffinityLossWithMemory(nn.Module):
             
             # Get target similarities
             current_class = y_true[i].long()
-            
-            # Check if current_class is within bounds
-            if current_class < 0 or current_class >= self.lookup.shape[0]:
-                continue
-                
             target_sims = self.lookup[current_class, initialized_classes]
             
             # Get time-based weights
@@ -519,11 +514,6 @@ class AffinityCosineLossWithMemory(nn.Module):
             
             # Get target similarities
             current_class = y_true[i].long()
-            
-            # Check if current_class is within bounds
-            if current_class < 0 or current_class >= self.lookup.shape[0]:
-                continue
-                
             target_sims = self.lookup[current_class, initialized_classes]
             
             # Get time-based weights
