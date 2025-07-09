@@ -155,6 +155,20 @@ class ContrastiveAffinityLoss(nn.Module):
             # Combined loss
             losses = similar_term + dissimilar_term
             
+            # Periodic debug output (every 100 steps)
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 0
+                
+            if self._debug_counter % 100 == 0:
+                print(f"\nContrastive Loss Debug (step {self._debug_counter}):")
+                print(f"  Distances - Min: {distances.min():.4f}, Max: {distances.max():.4f}, Mean: {distances.mean():.4f}")
+                print(f"  Target similarities - Min: {target_similarities.min():.4f}, Max: {target_similarities.max():.4f}, Mean: {target_similarities.mean():.4f}")
+                print(f"  Similar term - Mean: {similar_term.mean():.4f}")
+                print(f"  Dissimilar term - Mean: {dissimilar_term.mean():.4f}")
+                print(f"  Total loss - Mean: {losses.mean():.4f}")
+            
             # Return per-sample losses or mean loss
             if per_sample:
                 return losses.contiguous()
