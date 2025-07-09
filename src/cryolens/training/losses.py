@@ -134,6 +134,10 @@ class ContrastiveAffinityLoss(nn.Module):
                     valid_similarities = self.lookup[valid_obj_indices1, valid_obj_indices2]
                     target_similarities[both_obj_mask][valid_indices] = valid_similarities
             
+            # Debug: Check target similarities range
+            if torch.any(target_similarities < 0) or torch.any(target_similarities > 1):
+                print(f"WARNING: Target similarities outside [0,1] range! Min: {target_similarities.min():.4f}, Max: {target_similarities.max():.4f}")
+            
             # Calculate contrastive loss components
             # Similar pairs: S_{ij} * distance²
             similar_term = target_similarities * (distances ** 2)
