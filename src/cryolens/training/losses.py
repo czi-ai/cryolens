@@ -41,9 +41,15 @@ class ContrastiveAffinityLoss(nn.Module):
         self.latent_ratio = latent_ratio
         self.margin = margin
         
-        # Background similarity values
+        # Background similarity values (in [0,1] range)
         self.background_sim = 0.2  # Low similarity between background samples
         self.background_other_sim = 0.01  # Very low similarity between background and objects
+        
+        print(f"ContrastiveAffinityLoss initialized:")
+        print(f"  Margin: {self.margin}")
+        print(f"  Latent ratio: {self.latent_ratio}")
+        print(f"  Background-background similarity: {self.background_sim}")
+        print(f"  Background-object similarity: {self.background_other_sim}")
 
     def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
         """
@@ -338,9 +344,15 @@ class AffinityCosineLoss(nn.Module):
         self.l1loss = nn.L1Loss(reduction="none")  # Use "none" for per-sample loss
         self.latent_ratio = latent_ratio
         
-        # Background similarity values
+        # Background similarity values (in [0,1] range)
         self.background_sim = 0.2  # Low similarity between background samples
         self.background_other_sim = 0.01  # Very low similarity between background and objects
+        
+        print(f"ContrastiveAffinityLoss initialized:")
+        print(f"  Margin: {self.margin}")
+        print(f"  Latent ratio: {self.latent_ratio}")
+        print(f"  Background-background similarity: {self.background_sim}")
+        print(f"  Background-object similarity: {self.background_other_sim}")
 
     def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
         """Compute affinity loss with background handling.
