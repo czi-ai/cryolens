@@ -123,6 +123,7 @@ class SimilarityCalculator:
             global_max = np.max(off_diag_values)
             
             print(f"Global similarity range - Min: {global_min:.4f}, Max: {global_max:.4f}")
+            print(f"Mean similarity (off-diagonal): {np.mean(off_diag_values):.4f}")
             
             # Only normalize if we have a reasonable range
             if np.abs(global_max - global_min) > 1e-6:
