@@ -98,10 +98,14 @@ class ContrastiveAffinityLoss(nn.Module):
             features2 = y_pred_partial[c[:, 1], :].contiguous()
             
             # Calculate Euclidean distances between embeddings
-            # Normalize embeddings for more stable distance calculation
-            features1_norm = F.normalize(features1, p=2, dim=1)
-            features2_norm = F.normalize(features2, p=2, dim=1)
-            distances = torch.norm(features1_norm - features2_norm, p=2, dim=1)
+            # Option 1: Use raw embeddings without normalization for true Euclidean distance
+            distances = torch.norm(features1 - features2, p=2, dim=1)
+            
+            # For numerical stability, we can optionally scale distances
+            # This helps prevent gradient explosion/vanishing
+            # Scale factor based on embedding dimension to keep distances in reasonable range
+            scale_factor = 1.0 / np.sqrt(n_dims_to_use)
+            distances = distances * scale_factor
             
             # Handle background pairs
             is_background = (y_true == -1)
