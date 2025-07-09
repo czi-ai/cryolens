@@ -156,23 +156,8 @@ class ContrastiveAffinityLoss(nn.Module):
             margin_dist = torch.clamp(self.margin - distances, min=0)
             dissimilar_term = (1 - target_similarities) * (margin_dist ** 2)
             
-            # Apply importance weighting based on similarity values
-            # High similarity pairs (S > 0.9) are most important
-            # Medium similarity pairs (0.7 < S < 0.9) are moderately important  
-            # Low similarity pairs (S < 0.7) are less important
-            
-            # Create importance weights
-            importance_weights = torch.ones_like(target_similarities)
-            high_sim_mask = target_similarities > 0.9
-            med_sim_mask = (target_similarities > 0.7) & (target_similarities <= 0.9)
-            low_sim_mask = target_similarities <= 0.7
-            
-            importance_weights[high_sim_mask] = 2.0  # Double weight for very similar pairs
-            importance_weights[med_sim_mask] = 1.0   # Normal weight for medium similarity
-            importance_weights[low_sim_mask] = 0.5   # Half weight for dissimilar pairs
-            
-            # Combined loss with importance weighting
-            losses = importance_weights * (similar_term + dissimilar_term)
+            # Combined loss
+            losses = similar_term + dissimilar_term
             
             # Periodic debug output (every 100 steps)
             if hasattr(self, '_debug_counter'):
