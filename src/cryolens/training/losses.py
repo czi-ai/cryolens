@@ -32,7 +32,7 @@ class ContrastiveAffinityLoss(nn.Module):
         Margin for dissimilar pairs in contrastive loss (default: 4.0).
     """
 
-    def __init__(self, lookup: torch.Tensor, device: torch.device, latent_ratio: float = 0.75, margin: float = 4.0):
+    def __init__(self, lookup: torch.Tensor, device: torch.device, latent_ratio: float = 0.75, margin: float = 2.0):
         super().__init__()
         # Register lookup buffer (similarity matrix)
         lookup = lookup.clone().detach().contiguous()
