@@ -132,9 +132,8 @@ class SimilarityCalculator:
                 # Normalize off-diagonal elements to [0, 1] range
                 normalized_matrix[off_diag_mask] = (off_diag_values - global_min) / (global_max - global_min)
                 
-                # Optionally scale to [-1, 1] range if using negative similarities
-                if global_min < 0 or np.any(matrix < 0):
-                    normalized_matrix[off_diag_mask] = 2.0 * normalized_matrix[off_diag_mask] - 1.0
+                # Keep similarities in [0, 1] range for contrastive loss
+                # Do NOT rescale to [-1, 1] as contrastive loss expects [0, 1]
                 
                 # Ensure the diagonal remains at 1.0
                 np.fill_diagonal(normalized_matrix, 1.0)
