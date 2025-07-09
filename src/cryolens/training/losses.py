@@ -354,6 +354,129 @@ class MissingWedgeLoss(nn.Module):
         return total_loss
 
 
+class AdaptiveContrastiveAffinityLoss(ContrastiveAffinityLoss):
+    """
+    Adaptive contrastive affinity loss that automatically emphasizes high-similarity pairs.
+    
+    This loss uses a non-parametric weighting scheme where the similarity value itself
+    determines the importance of each pair. High-similarity pairs naturally get more
+    weight, ensuring accuracy where it matters most.
+    """
+    
+    def __init__(self, *args, weighting_power: float = 2.0, **kwargs):
+        """
+        Parameters
+        ----------
+        weighting_power : float
+            Power to raise similarities to for importance weighting (default: 2.0).
+            Higher values give more emphasis to high-similarity pairs.
+        """
+        super().__init__(*args, **kwargs)
+        self.weighting_power = weighting_power
+        print(f"AdaptiveContrastiveAffinityLoss initialized with weighting_power={weighting_power}")
+    
+    def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
+        """Compute adaptive contrastive affinity loss."""
+        try:
+            # Get base loss computation up to the point where we have components
+            y_true = y_true.contiguous().to(self.device)
+            y_pred = y_pred.contiguous().to(self.device)
+
+            if y_true.shape[0] < 2:
+                return torch.tensor(0.0, device=self.device, requires_grad=True)
+
+            if torch.all(y_true == -1):
+                return torch.tensor(0.0, device=self.device, requires_grad=True)
+
+            n_dims = y_pred.shape[1]
+            n_dims_to_use = int(n_dims * self.latent_ratio)
+            y_pred_partial = y_pred[:, :n_dims_to_use].contiguous()
+
+            z_id = torch.arange(y_pred_partial.shape[0], device=self.device)
+            c = torch.combinations(z_id, r=2, with_replacement=False)
+            
+            features1 = y_pred_partial[c[:, 0], :].contiguous()
+            features2 = y_pred_partial[c[:, 1], :].contiguous()
+            
+            # Calculate distances
+            distances = torch.norm(features1 - features2, p=2, dim=1)
+            scale_factor = 1.0 / np.sqrt(n_dims_to_use)
+            distances = distances * scale_factor
+            
+            # Get target similarities (same logic as parent class)
+            is_background = (y_true == -1)
+            pair1_is_bg = is_background[c[:, 0]]
+            pair2_is_bg = is_background[c[:, 1]]
+            
+            target_similarities = torch.zeros_like(distances, device=self.device)
+            
+            both_bg_mask = pair1_is_bg & pair2_is_bg
+            target_similarities[both_bg_mask] = self.background_sim
+            
+            one_bg_mask = pair1_is_bg ^ pair2_is_bg
+            target_similarities[one_bg_mask] = self.background_other_sim
+            
+            both_obj_mask = ~(both_bg_mask | one_bg_mask)
+            if torch.any(both_obj_mask):
+                obj_pairs = c[both_obj_mask]
+                obj_indices1 = y_true[obj_pairs[:, 0]]
+                obj_indices2 = y_true[obj_pairs[:, 1]]
+                
+                valid_indices = ((obj_indices1 >= 0) & (obj_indices2 >= 0) & 
+                            (obj_indices1 < self.lookup.shape[0]) & 
+                            (obj_indices2 < self.lookup.shape[0]))
+                
+                if torch.any(valid_indices):
+                    valid_obj_indices1 = obj_indices1[valid_indices].long()
+                    valid_obj_indices2 = obj_indices2[valid_indices].long()
+                    valid_similarities = self.lookup[valid_obj_indices1, valid_obj_indices2]
+                    target_similarities[both_obj_mask][valid_indices] = valid_similarities
+            
+            # Calculate loss components
+            similar_term = target_similarities * (distances ** 2)
+            margin_dist = torch.clamp(self.margin - distances, min=0)
+            dissimilar_term = (1 - target_similarities) * (margin_dist ** 2)
+            
+            # Non-parametric adaptive weighting based on similarity
+            # Use similarity^power as importance weight
+            # This naturally emphasizes high-similarity pairs
+            importance_weights = target_similarities ** self.weighting_power
+            
+            # Normalize weights to maintain gradient scale
+            importance_weights = importance_weights / (importance_weights.mean() + 1e-8)
+            
+            # Apply adaptive weighting
+            losses = importance_weights * (similar_term + dissimilar_term)
+            
+            # Debug output
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 0
+                
+            if self._debug_counter % 100 == 0:
+                print(f"\nAdaptive Contrastive Loss Debug (step {self._debug_counter}):")
+                print(f"  Importance weights - Min: {importance_weights.min():.4f}, Max: {importance_weights.max():.4f}, Mean: {importance_weights.mean():.4f}")
+                print(f"  High sim pairs (>0.9): {(target_similarities > 0.9).sum().item()} with avg weight: {importance_weights[target_similarities > 0.9].mean():.4f if (target_similarities > 0.9).any() else 0}")
+                print(f"  Low sim pairs (<0.5): {(target_similarities < 0.5).sum().item()} with avg weight: {importance_weights[target_similarities < 0.5].mean():.4f if (target_similarities < 0.5).any() else 0}")
+            
+            if per_sample:
+                return losses.contiguous()
+            
+            result = torch.mean(losses)
+            
+            if torch.isnan(result):
+                zero_tensor = torch.tensor(0.0, device=self.device)
+                result = zero_tensor.requires_grad_() + result.detach() * 0
+                
+            return result
+
+        except Exception as e:
+            print(f"Error in adaptive contrastive affinity loss: {str(e)}")
+            zero_tensor = torch.tensor(0.0, device=self.device)
+            return zero_tensor.requires_grad_()
+
+
 class AffinityCosineLoss(nn.Module):
     """Affinity loss based on cosine similarity that handles background samples.
     
