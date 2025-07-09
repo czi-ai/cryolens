@@ -308,6 +308,10 @@ class ContrastiveAffinityLossWithMemoryV2(nn.Module):
             # Get target similarities for batch pairs
             target_similarities = self._get_target_similarities(y_true, c)
             
+            # Debug: Verify similarities are in [0,1] range
+            if torch.any(target_similarities < 0) or torch.any(target_similarities > 1):
+                print(f"WARNING in memory bank loss: Target similarities outside [0,1] range! Min: {target_similarities.min():.4f}, Max: {target_similarities.max():.4f}")
+            
             # Calculate standard contrastive loss
             similar_term = target_similarities * (distances ** 2)
             margin_dist = torch.clamp(self.margin - distances, min=0)
