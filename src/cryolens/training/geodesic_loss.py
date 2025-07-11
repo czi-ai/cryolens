@@ -32,7 +32,9 @@ class MetricTensor(nn.Module):
         tril_flat = self.net(z).view(batch_size, -1).contiguous()
 
         # create the lower triangular matrix, L
-        L = torch.zeros(batch_size, self.latent_dim, self.latent_dim, device=z.device)
+        # Ensure L has the same dtype as the input
+        L = torch.zeros(batch_size, self.latent_dim, self.latent_dim, 
+                       device=z.device, dtype=z.dtype)
         tril_indices = torch.tril_indices(
             row=self.latent_dim, 
             col=self.latent_dim, 
@@ -143,6 +145,9 @@ class GeodesicAffinityLoss(torch.nn.Module):
 
         affinity_loss = 0.0
         batch_size = y_pred.shape[0]
+
+        # Ensure consistent dtype (use float32 for loss calculation)
+        y_pred = y_pred.float()
 
         # calculate the upper triangle only
         for i in range(batch_size):
