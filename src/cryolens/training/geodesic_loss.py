@@ -113,8 +113,12 @@ class GeodesicAffinityLoss(torch.nn.Module):
     def __init__(self, lookup: torch.Tensor, latent_dim: int, device: torch.device):
         super().__init__()
         self.device = device
-        self.lookup = torch.tensor(lookup).to(device)
-        self.metric = MetricTensor(latent_dim=latent_dim).to(device)
+        # Register lookup as a buffer so it's saved with the model
+        self.register_buffer('lookup', torch.tensor(lookup).to(device))
+        # Register MetricTensor as a submodule so it's saved with checkpoints
+        self.metric = MetricTensor(latent_dim=latent_dim)
+        # Move metric to device after initialization
+        self.metric = self.metric.to(device)
         self.l1loss = torch.nn.L1Loss()
 
     def forward(
