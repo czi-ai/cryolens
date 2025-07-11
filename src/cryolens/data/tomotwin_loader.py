@@ -17,6 +17,15 @@ from torch.utils.data.distributed import DistributedSampler
 
 from cryolens.data.datasets import CachedParquetDataset
 
+# Try to import background generator if available
+try:
+    from cryolens.data.background_generator import BackgroundGenerator, OnlineBackgroundGenerator
+    BACKGROUND_GENERATOR_AVAILABLE = True
+except ImportError:
+    BACKGROUND_GENERATOR_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Background generator not available")
+
 logger = logging.getLogger(__name__)
 
 class TomoTwinParquetDataset(CachedParquetDataset):
@@ -362,6 +371,12 @@ class TomoTwinDataset(Dataset):
         Maximum number of structures to load per node (default: None, loads all available)
     filtered_structure_ids : list or None
         List of specific structure IDs to load (default: None, loads all available)
+    enable_background : bool
+        Whether to enable background generation (default: False)
+    background_ratio : float
+        Ratio of background samples to include (default: 0.2)
+    background_params : dict or None
+        Parameters for background generator
     """
     
     def __init__(
@@ -379,7 +394,10 @@ class TomoTwinDataset(Dataset):
         normalization="z-score",
         max_structures=None,
         filtered_structure_ids=None,
-        external_molecule_order=None
+        external_molecule_order=None,
+        enable_background=False,
+        background_ratio=0.2,
+        background_params=None
     ):
         self.base_dir = Path(base_dir)
         self.name_to_pdb = name_to_pdb or {}
@@ -395,6 +413,22 @@ class TomoTwinDataset(Dataset):
         self.max_structures = max_structures
         self.filtered_structure_ids = filtered_structure_ids
         self.external_molecule_order = external_molecule_order
+        self.enable_background = enable_background
+        self.background_ratio = background_ratio
+        self.background_params = background_params or {}
+        
+        # Initialize background generator if enabled
+        self.background_generator = None
+        if self.enable_background and BACKGROUND_GENERATOR_AVAILABLE:
+            self.background_generator = OnlineBackgroundGenerator(
+                generator_params=self.background_params,
+                cache_size=100  # Cache some backgrounds for efficiency
+            )
+            if rank == 0 or rank is None:
+                logger.info("Background generator initialized with params: {}".format(self.background_params))
+        elif self.enable_background and not BACKGROUND_GENERATOR_AVAILABLE:
+            logger.warning("Background generation requested but generator not available")
+            self.enable_background = False
         
         # Set random seed with distributed awareness
         self._set_random_seed()
@@ -437,7 +471,27 @@ class TomoTwinDataset(Dataset):
             print(f"{rank_str}: Filtered structure IDs: {self.filtered_structure_ids}")
             print(f"{'='*60}\n")
             
-            for pdb_id in self.filtered_structure_ids:
+            # Check if 'background' is in the list
+            has_background = 'background' in self.filtered_structure_ids
+            if has_background:
+                # Enable background generation if 'background' is in PDB codes
+                if not self.enable_background:
+                    self.enable_background = True
+                    if BACKGROUND_GENERATOR_AVAILABLE:
+                        self.background_generator = OnlineBackgroundGenerator(
+                            generator_params=self.background_params,
+                            cache_size=100
+                        )
+                        print(f"{rank_str}: Enabled background generation due to 'background' in PDB codes")
+                    else:
+                        logger.warning("Background requested but generator not available")
+                        
+                # Remove 'background' from the list as it's not a real PDB directory
+                filtered_ids_without_bg = [pid for pid in self.filtered_structure_ids if pid != 'background']
+            else:
+                filtered_ids_without_bg = self.filtered_structure_ids
+            
+            for pdb_id in filtered_ids_without_bg:
                 pdb_dir = self.base_dir / pdb_id
                 if pdb_dir.exists() and pdb_dir.is_dir():
                     structure_dirs[pdb_id] = pdb_dir
@@ -446,7 +500,9 @@ class TomoTwinDataset(Dataset):
                     logger.warning(f"Structure directory {pdb_dir} not found for PDB ID {pdb_id}")
                     print(f"{rank_str}: WARNING - Missing directory for PDB {pdb_id}: {pdb_dir}")
                     
-            print(f"\n{rank_str}: Final structure_dirs after filtering: {list(structure_dirs.keys())}\n")
+            print(f"\n{rank_str}: Final structure_dirs after filtering: {list(structure_dirs.keys())}")
+            if has_background:
+                print(f"{rank_str}: Background generation is enabled")
         else:
             # Original logic: discover all structure directories
             for pdb_dir in self.base_dir.iterdir():
@@ -546,6 +602,15 @@ class TomoTwinDataset(Dataset):
         self.structure_names = valid_structure_names
         self.molecule_to_idx = {name: idx for idx, name in enumerate(sorted(valid_structure_names))}
         
+        # Add background to the mapping if enabled
+        if self.enable_background and self.background_generator:
+            # Background gets a special index (-1 will be used in __getitem__)
+            # But we need to track it for logging and stats
+            self.has_background = True
+            logger.info(f"{log_prefix}: Background generation enabled with ratio {self.background_ratio}")
+        else:
+            self.has_background = False
+        
         # Log all valid structure names being used on this worker
         log_prefix = f"Rank {self.rank if self.rank is not None else 'None'}"
         logger.info(f"{log_prefix}: Using the following {len(valid_structure_names)} structures:")
@@ -615,9 +680,36 @@ class TomoTwinDataset(Dataset):
                 default_shape = (1, self.box_size, self.box_size, self.box_size)
                 return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long)
             
-            # Randomly sample from the dataset
-            real_idx = random.randrange(self.total_items)
-            return self.dataset[real_idx]
+            # Decide whether to return a background sample
+            if self.enable_background and self.background_generator and random.random() < self.background_ratio:
+                # Generate a background sample
+                # First get a random real sample to use as source
+                real_idx = random.randrange(self.total_items)
+                source_volume, _ = self.dataset[real_idx]
+                
+                # Convert to numpy if needed
+                if isinstance(source_volume, torch.Tensor):
+                    source_np = source_volume.numpy()
+                    if source_np.ndim == 4:  # Remove channel dimension
+                        source_np = source_np[0]
+                else:
+                    source_np = source_volume
+                
+                # Generate background
+                background_np = self.background_generator.get_background(source_volume=source_np)
+                
+                # Convert back to tensor format
+                background_np = np.ascontiguousarray(background_np)
+                if background_np.ndim == 3:
+                    background_np = np.expand_dims(background_np, axis=0)
+                background_tensor = torch.from_numpy(background_np).to(dtype=torch.float32)
+                
+                # Return with special background index (-1)
+                return background_tensor, torch.tensor(-1, dtype=torch.long)
+            else:
+                # Randomly sample from the regular dataset
+                real_idx = random.randrange(self.total_items)
+                return self.dataset[real_idx]
             
         except Exception as e:
             logger.error(f"Error in __getitem__: {str(e)}")
@@ -734,7 +826,10 @@ def create_tomotwin_dataloader(
     snr_values=None,
     max_structures=None,
     filtered_structure_ids=None,
-    external_molecule_order=None
+    external_molecule_order=None,
+    enable_background=False,
+    background_ratio=0.2,
+    background_params=None
 ):
     """Create a DataLoader for TomoTwin data.
     
@@ -758,6 +853,12 @@ def create_tomotwin_dataloader(
         List of specific structure IDs to load (default: None, loads all available)
     external_molecule_order : list or None
         External ordering of molecules for consistent indexing with similarity matrix
+    enable_background : bool
+        Whether to enable background generation
+    background_ratio : float
+        Ratio of background samples to include
+    background_params : dict or None
+        Parameters for background generator
         
     Returns
     -------
@@ -782,7 +883,10 @@ def create_tomotwin_dataloader(
         normalization="z-score",
         max_structures=max_structures,
         filtered_structure_ids=filtered_structure_ids,
-        external_molecule_order=external_molecule_order
+        external_molecule_order=external_molecule_order,
+        enable_background=enable_background,
+        background_ratio=background_ratio,
+        background_params=background_params
     )
     
     # Print molecular stats
