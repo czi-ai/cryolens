@@ -42,6 +42,8 @@ class MetricTensor(nn.Module):
             device=z.device
         )
         tril_flat = tril_flat.view(batch_size, self.tril_elems)
+        # Ensure tril_flat has the same dtype as L
+        tril_flat = tril_flat.to(dtype=L.dtype)
         L[:, tril_indices[0], tril_indices[1]] = tril_flat
 
         # ensure the diagonal is positive for stability
