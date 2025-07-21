@@ -293,7 +293,7 @@ class SingleStructureTomoTwinDataset(Dataset):
             
         # Randomly select one batch file
         selected_batch = random.choice(batch_files)
-        logger.debug(f"Selected batch file {selected_batch.name} for structure {self.structure_name}")
+        logger.info(f"Structure {self.structure_name}: Selected {selected_batch.name} from {selected_snr.name} ({len(batch_files)} available batches)")
         
         # Load the batch file as a dataset
         try:
@@ -332,6 +332,19 @@ class SingleStructureTomoTwinDataset(Dataset):
             return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long)
             
         return self.dataset[idx]
+    
+    def reload_batch(self):
+        """Reload a new random batch file for this structure."""
+        logger.info(f"Reloading batch for structure {self.structure_name}")
+        old_dataset = self.dataset
+        self.dataset = self._load_single_batch()
+        
+        if old_dataset is not None and self.dataset is not None:
+            logger.info(f"Structure {self.structure_name}: Reloaded from {len(old_dataset)} to {len(self.dataset)} samples")
+        elif self.dataset is not None:
+            logger.info(f"Structure {self.structure_name}: Loaded {len(self.dataset)} samples on reload")
+        else:
+            logger.warning(f"Structure {self.structure_name}: Failed to reload batch")
 
 
 class TomoTwinDataset(Dataset):
@@ -654,6 +667,29 @@ class TomoTwinDataset(Dataset):
             
         matrix_size = len(self.molecule_to_idx) if hasattr(self, 'molecule_to_idx') else 0
         return f"Loaded {len(self.structure_names)} structures with a total of {self.total_items} samples. Lookup matrix size: {matrix_size}x{matrix_size}"
+    
+    def reload_batches(self):
+        """Reload new random batch files for all structures."""
+        if not hasattr(self, 'dataset') or self.dataset is None:
+            logger.warning("No dataset to reload")
+            return
+            
+        logger.info(f"Reloading batch files for all {len(self.structure_names)} structures")
+        
+        # Reload each structure dataset
+        for i, struct_name in enumerate(self.structure_names):
+            # Find the underlying SingleStructureTomoTwinDataset
+            if hasattr(self.dataset, 'datasets'):
+                for dataset_wrapper in self.dataset.datasets:
+                    if hasattr(dataset_wrapper, 'dataset') and hasattr(dataset_wrapper.dataset, 'structure_name'):
+                        if dataset_wrapper.dataset.structure_name == struct_name:
+                            dataset_wrapper.dataset.reload_batch()
+                            break
+        
+        # Update total items count
+        if hasattr(self.dataset, 'datasets'):
+            self.total_items = sum(len(ds) for ds in self.dataset.datasets)
+            logger.info(f"After reload: {self.total_items} total samples across all structures")
     
     def __len__(self):
         """Return the dataset size."""
