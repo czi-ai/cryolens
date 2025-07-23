@@ -69,8 +69,10 @@ class SimilarityCalculator:
             cursor.execute(query, actual_structure_ids + actual_structure_ids)
             rows = cursor.fetchall()
             
-            # Build matrix from pairwise values
+            # Build matrix from pairwise values and track which pairs were found
             id_to_idx = {sid: idx for idx, sid in enumerate(actual_structure_ids)}
+            found_pairs = set()
+            
             for mol1, mol2, value in rows:
                 # Only include if both molecules are in our structure list
                 if mol1 in id_to_idx and mol2 in id_to_idx:
@@ -78,6 +80,9 @@ class SimilarityCalculator:
                     j = id_to_idx[mol2]
                     matrix[i, j] = value
                     matrix[j, i] = value  # Ensure symmetry
+                    # Track that we found this pair (store sorted pair)
+                    pair_key = tuple(sorted([mol1, mol2]))
+                    found_pairs.add(pair_key)
                     
             # Fill diagonal with 1.0
             np.fill_diagonal(matrix, 1.0)
@@ -89,11 +94,12 @@ class SimilarityCalculator:
                     matrix[idx, :] = -np.abs(matrix[idx, :])
                     matrix[idx, idx] = 1.0  # Reset diagonal to 1.0
             
-            # Verify we have all needed similarities
+            # Verify we have all needed similarities by checking if pairs exist in database
             missing = []
             for i, mol1 in enumerate(actual_structure_ids):
                 for j, mol2 in enumerate(actual_structure_ids[i+1:], i+1):  # Only check upper triangle
-                    if matrix[i, j] == 0:
+                    pair_key = tuple(sorted([mol1, mol2]))
+                    if pair_key not in found_pairs:
                         missing.append((mol1, mol2))
                         
             if missing:
@@ -106,7 +112,6 @@ class SimilarityCalculator:
                 
                 missing_pairs = ', '.join([f'({m1}, {m2})' for m1, m2 in missing[:5]])
                 extra = f" and {len(missing) - 5} more pairs" if len(missing) > 5 else ""
-                breakpoint()
                 raise ValueError(f"Missing similarity values for pairs: {missing_pairs}{extra}")
             
             print(f"\nSimilarity Matrix molecules: {actual_structure_ids}")
