@@ -45,8 +45,7 @@ class ContrastiveAffinityLoss(nn.Module):
         self.background_sim = 0.2  # Low similarity between background samples
         self.background_other_sim = 0.01  # Very low similarity between background and objects
         
-        print(f"ContrastiveAffinityLoss initialized:")
-        print(f"  Margin: {self.margin}")
+        print(f"AffinityCosineLoss initialized:")
         print(f"  Latent ratio: {self.latent_ratio}")
         print(f"  Background-background similarity: {self.background_sim}")
         print(f"  Background-object similarity: {self.background_other_sim}")
@@ -489,8 +488,7 @@ class AffinityCosineLoss(nn.Module):
         self.background_sim = 0.2  # Low similarity between background samples
         self.background_other_sim = 0.01  # Very low similarity between background and objects
         
-        print(f"ContrastiveAffinityLoss initialized:")
-        print(f"  Margin: {self.margin}")
+        print(f"AffinityCosineLoss initialized:")
         print(f"  Latent ratio: {self.latent_ratio}")
         print(f"  Background-background similarity: {self.background_sim}")
         print(f"  Background-object similarity: {self.background_other_sim}")
