@@ -552,57 +552,26 @@ class CurriculumParquetDataset(Dataset):
                         logging.warning(f"Missing required columns in {path}: {missing_cols}")
                         continue
                     
-                    # Process and normalize each subvolume during loading
-                    def process_and_normalize_subvolume(row):
-                        subvolume = row['subvolume']
-                        shape = row['shape']
-                        
-                        if isinstance(subvolume, bytes):
+                    # Validate subvolumes but defer normalization to __getitem__
+                    def validate_subvolume(x):
+                        if isinstance(x, bytes):
                             try:
-                                # Convert from bytes to numpy array
-                                subvolume = np.frombuffer(subvolume, dtype=np.float32).copy()
-                                
-                                # Reshape to original volume shape
-                                subvolume = subvolume.reshape(shape)
-                                
-                                # Apply normalization
-                                subvolume = self._normalize_volume(subvolume)
-                                
-                                # Flatten for storage
-                                return subvolume.flatten()
+                                # Just validate we can read it, don't process it yet
+                                test_array = np.frombuffer(x, dtype=np.float32)
+                                return x  # Keep original bytes
                             except Exception as e:
                                 if self.rank == 0 or self.rank is None:
-                                    logging.warning(f"Error normalizing subvolume: {str(e)}")
+                                    logging.warning(f"Invalid subvolume bytes: {str(e)}")
                                 return None
-                        elif isinstance(subvolume, np.ndarray):
-                            try:
-                                # Reshape if needed
-                                if subvolume.shape != shape:
-                                    subvolume = subvolume.reshape(shape)
-                                
-                                # Apply normalization
-                                subvolume = self._normalize_volume(subvolume)
-                                
-                                # Flatten for storage
-                                return subvolume.flatten()
-                            except Exception as e:
-                                if self.rank == 0 or self.rank is None:
-                                    logging.warning(f"Error normalizing subvolume: {str(e)}")
-                                return None
+                        elif isinstance(x, np.ndarray):
+                            return x  # Keep original array
                         return None
                     
-                    # Apply normalization to all subvolumes
                     if self.rank == 0 or self.rank is None:
-                        logging.info(f"Normalizing subvolumes with method: {self.normalization}")
+                        logging.info(f"Validating subvolumes (normalization deferred to access time)")
                     
-                    # Process each subvolume 
-                    normalized_subvolumes = []
-                    for i, row in df.iterrows():
-                        normalized = process_and_normalize_subvolume(row)
-                        normalized_subvolumes.append(normalized)
-                    
-                    # Update the dataframe with normalized subvolumes
-                    df['subvolume'] = normalized_subvolumes
+                    # Only validate, don't process all subvolumes at once
+                    df['subvolume'] = df['subvolume'].apply(validate_subvolume)
                     
                     # Filter out invalid rows
                     valid_mask = df['subvolume'].notna()
