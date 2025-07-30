@@ -959,9 +959,10 @@ class CurriculumParquetDataset(Dataset):
                 
                 subvolume = subvolume.reshape(snr_data['shape'])
                 
+                # Apply normalization at access time
+                subvolume = self._normalize_volume(subvolume)
+                
                 # No augmentation for visualization samples to ensure consistency
-                # Ensure contiguous memory layout before converting to tensor
-                subvolume = np.ascontiguousarray(subvolume)
                 # Ensure contiguous memory layout before converting to tensor
                 subvolume = np.ascontiguousarray(subvolume)
                 subvolume = np.expand_dims(subvolume, axis=0)
@@ -1035,11 +1036,12 @@ class CurriculumParquetDataset(Dataset):
                 
                 subvolume = subvolume.reshape(snr_data['shape'])
                 
+                # Apply normalization at access time
+                subvolume = self._normalize_volume(subvolume)
+                
                 if self.augment:
                     subvolume = self._augment_volume(subvolume)
                     
-                # Ensure contiguous memory layout before converting to tensor
-                subvolume = np.ascontiguousarray(subvolume)
                 # Ensure contiguous memory layout before converting to tensor
                 subvolume = np.ascontiguousarray(subvolume)
                 subvolume = np.expand_dims(subvolume, axis=0)
