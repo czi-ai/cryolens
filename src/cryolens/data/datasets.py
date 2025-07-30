@@ -604,10 +604,11 @@ class CurriculumParquetDataset(Dataset):
                 if self.rank == 0 or self.rank is None:
                     sample_counts = self.df.groupby(['source_type', 'molecule_id']).size()
                     logging.info(f"Sample distribution: {sample_counts}")
-                    logging.info(f"Successfully normalized {len(self.df)} subvolumes")
+                    logging.info(f"Dataset loaded with {len(self.df)} samples (normalization deferred)")
             else:
                 # Create empty dataframe if no valid data was loaded
                 self.df = pd.DataFrame(columns=['subvolume', 'shape', 'molecule_id', 'source_type', 'sample_id'])
+                self.total_items = 0
                 logging.warning("No valid data was loaded from any of the parquet files")
                 
         except Exception as e:
