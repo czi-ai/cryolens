@@ -418,6 +418,8 @@ class CurriculumParquetDataset(Dataset):
         normalization="z-score",
         augment_config=None
     ):
+        logger.info(f"CurriculumParquetDataset.__init__ starting with {len(parquet_paths)} paths")
+        
         self.parquet_paths = [Path(p) for p in parquet_paths]
         self.name_to_pdb = name_to_pdb or {}
         self.box_size = box_size
@@ -430,6 +432,7 @@ class CurriculumParquetDataset(Dataset):
         self.world_size = world_size
         self.normalization = normalization
         
+        logger.info(f"Setting up augmentation config...")
         # Set default augmentation configuration
         default_augment_config = {
             'rotation_prob': 0,
@@ -445,6 +448,7 @@ class CurriculumParquetDataset(Dataset):
         self.current_epoch = 0
         self.current_stage = 0
         
+        logger.info(f"Setting random seed...")
         # Set random seed
         if self.rank is not None:
             # Use different seed for each process
@@ -459,8 +463,10 @@ class CurriculumParquetDataset(Dataset):
         self.weights = []
         self.total_items = 0
         
+        logger.info(f"About to load data from {len(self.parquet_paths)} parquet files...")
         # Combine data from all parquet files
         self._load_data()
+        logger.info(f"Data loading completed. Total items: {self.total_items}")
         
         # Make sure we have at least one valid dataset
         if self.total_items == 0:
@@ -473,9 +479,9 @@ class CurriculumParquetDataset(Dataset):
                     print(f"Dataset {i} path: {path}")
         
         # Update weights based on curriculum
-        print(f"Rank {rank if rank is not None else 'None'}: DEADLOCK_DEBUG - Updating dataset weights")
+        logger.info(f"Updating dataset weights...")
         self._update_weights()
-        print(f"Rank {rank if rank is not None else 'None'}: DEADLOCK_DEBUG - CurriculumParquetDataset initialization complete")
+        logger.info(f"CurriculumParquetDataset initialization complete")
     
     def _normalize_volume(self, volume):
         """Normalize the volume based on the selected normalization method.
@@ -528,15 +534,16 @@ class CurriculumParquetDataset(Dataset):
         
     def _load_data(self):
         """Load data from multiple parquet files with validation and apply normalization."""
+        logger.info("Starting _load_data()...")
         try:
             # Load all dataframes
             dataframes = []
             
             for path_idx, path in enumerate(self.parquet_paths):
+                logger.info(f"Loading parquet file {path_idx + 1}/{len(self.parquet_paths)}: {path}")
                 try:
                     df = pd.read_parquet(path)
-                    if self.rank == 0 or self.rank is None:
-                        logging.info(f"Loaded {len(df)} samples from {path}")
+                    logger.info(f"Successfully loaded {len(df)} samples from {path}")
                     
                     # Add source identifier for curriculum sampling
                     source_name = f"source_{path_idx}"
@@ -552,6 +559,7 @@ class CurriculumParquetDataset(Dataset):
                         logging.warning(f"Missing required columns in {path}: {missing_cols}")
                         continue
                     
+                    logger.info(f"Validating subvolumes for file {path_idx + 1}...")
                     # Validate subvolumes but defer normalization to __getitem__
                     def validate_subvolume(x):
                         if isinstance(x, bytes):
@@ -567,11 +575,10 @@ class CurriculumParquetDataset(Dataset):
                             return x  # Keep original array
                         return None
                     
-                    if self.rank == 0 or self.rank is None:
-                        logging.info(f"Validating subvolumes (normalization deferred to access time)")
-                    
+                    logger.info(f"Applying validation to subvolumes...")
                     # Only validate, don't process all subvolumes at once
                     df['subvolume'] = df['subvolume'].apply(validate_subvolume)
+                    logger.info(f"Validation completed for file {path_idx + 1}")
                     
                     # Filter out invalid rows
                     valid_mask = df['subvolume'].notna()
@@ -587,17 +594,22 @@ class CurriculumParquetDataset(Dataset):
                     )
                     
                     dataframes.append(df)
+                    logger.info(f"File {path_idx + 1} processed successfully with {len(df)} valid samples")
                     
                 except Exception as e:
-                    if self.rank == 0 or self.rank is None:
-                        logging.error(f"Error loading dataset from {path}: {str(e)}")
+                    logger.error(f"Error loading dataset from {path}: {str(e)}")
+                    traceback.print_exc()
             
+            logger.info(f"Combining {len(dataframes)} dataframes...")
             # Combine all dataframes
             if dataframes:
                 self.df = pd.concat(dataframes, ignore_index=True)
                 self.total_items = len(self.df)
                 
+                logger.info(f"Combined dataframe has {self.total_items} samples")
+                
                 # Initialize molecule mapping
+                logger.info("Initializing molecule mapping...")
                 self._initialize_molecule_mapping()
                 
                 # Log sample distribution
@@ -613,8 +625,10 @@ class CurriculumParquetDataset(Dataset):
                 
         except Exception as e:
             logging.error(f"Error loading data on rank {self.rank if self.rank is not None else 0}: {str(e)}")
+            traceback.print_exc()
             # Create empty dataframe as fallback
             self.df = pd.DataFrame(columns=['subvolume', 'shape', 'molecule_id', 'source_type', 'sample_id'])
+            self.total_items = 0
         
     def _initialize_molecule_mapping(self):
         """Create mapping between molecule IDs and indices using PDB IDs."""
