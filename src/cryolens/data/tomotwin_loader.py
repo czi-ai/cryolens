@@ -997,8 +997,19 @@ def create_tomotwin_dataloader(
             seed=171717
         )
     
-    # Use fewer workers to avoid potential deadlocks
-    num_workers = min(16, max(1, os.cpu_count() // (torch.cuda.device_count() * 2 if torch.cuda.is_available() else 2)))
+    # Use fewer workers to avoid potential deadlocks and thread contention
+    # For distributed training stability, use fewer workers per GPU
+    base_workers = max(1, os.cpu_count() // (torch.cuda.device_count() * 4 if torch.cuda.is_available() else 4))
+    if dist_config:
+        # In distributed mode, use even fewer workers to prevent race conditions
+        num_workers = min(4, base_workers)
+    else:
+        num_workers = min(8, base_workers)
+    
+    # For debugging the reload issue, temporarily use 0 workers to eliminate multiprocessing
+    if os.environ.get('CRYOLENS_DEBUG_WORKERS') == '1':
+        num_workers = 0
+        print(f"DEBUG MODE: Using 0 workers to eliminate multiprocessing issues")
     
     if dist_config is None or dist_config.node_rank == 0:
         logger.info(f"Using {num_workers} workers for dataloader with batch size {per_gpu_batch_size}")
