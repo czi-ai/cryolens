@@ -682,27 +682,61 @@ class TomoTwinDataset(Dataset):
         return f"Loaded {len(self.structure_names)} structures with a total of {self.total_items} samples. Lookup matrix size: {matrix_size}x{matrix_size}"
     
     def reload_batches(self):
-        """Reload new random batch files for all structures."""
+        """Reload new random batch files for all structures with thread safety."""
         if not hasattr(self, 'dataset') or self.dataset is None:
             logger.warning("No dataset to reload")
             return
+        
+        # Add thread safety to prevent concurrent reloads
+        if not hasattr(self, '_reload_lock'):
+            import threading
+            self._reload_lock = threading.Lock()
+        
+        # Use try_acquire to avoid blocking if another thread is already reloading
+        if not self._reload_lock.acquire(blocking=False):
+            logger.debug(f"Rank {self.rank}: Skipping batch reload - another thread is already reloading")
+            return
+        
+        try:
+            # Rate limiting: don't reload too frequently
+            if not hasattr(self, '_last_global_reload_time'):
+                self._last_global_reload_time = 0
             
-        logger.info(f"Reloading batch files for all {len(self.structure_names)} structures")
-        
-        # Reload each structure dataset
-        for i, struct_name in enumerate(self.structure_names):
-            # Find the underlying SingleStructureTomoTwinDataset
-            if hasattr(self.dataset, 'datasets'):
-                for dataset_wrapper in self.dataset.datasets:
-                    if hasattr(dataset_wrapper, 'dataset') and hasattr(dataset_wrapper.dataset, 'structure_name'):
-                        if dataset_wrapper.dataset.structure_name == struct_name:
-                            dataset_wrapper.dataset.reload_batch()
+            import time
+            current_time = time.time()
+            min_global_reload_interval = 60.0  # Minimum 60 seconds between global reloads
+            
+            if current_time - self._last_global_reload_time < min_global_reload_interval:
+                logger.debug(f"Rank {self.rank}: Skipping global reload (too soon, last reload {current_time - self._last_global_reload_time:.1f}s ago)")
+                return
+            
+            logger.info(f"Rank {self.rank}: Reloading batch files for all {len(self.structure_names)} structures")
+            
+            # Reload each structure dataset with additional safety
+            reload_count = 0
+            for i, struct_name in enumerate(self.structure_names):
+                # Find the underlying SingleStructureTomoTwinDataset
+                if hasattr(self.dataset, 'datasets'):
+                    for dataset_wrapper in self.dataset.datasets:
+                        if (hasattr(dataset_wrapper, 'dataset') and 
+                            hasattr(dataset_wrapper.dataset, 'structure_name') and
+                            dataset_wrapper.dataset.structure_name == struct_name):
+                            try:
+                                dataset_wrapper.dataset.reload_batch()
+                                reload_count += 1
+                            except Exception as e:
+                                logger.error(f"Rank {self.rank}: Error reloading {struct_name}: {str(e)}")
                             break
-        
-        # Update total items count
-        if hasattr(self.dataset, 'datasets'):
-            self.total_items = sum(len(ds) for ds in self.dataset.datasets)
-            logger.info(f"After reload: {self.total_items} total samples across all structures")
+            
+            # Update total items count
+            if hasattr(self.dataset, 'datasets'):
+                self.total_items = sum(len(ds) for ds in self.dataset.datasets)
+                logger.info(f"Rank {self.rank}: Reloaded {reload_count}/{len(self.structure_names)} structures - {self.total_items} total samples")
+            
+            self._last_global_reload_time = current_time
+            
+        finally:
+            self._reload_lock.release()
     
     def __len__(self):
         """Return the dataset size."""
