@@ -543,7 +543,11 @@ class AffinityCosineLoss(nn.Module):
             features1_norm = F.normalize(features1, p=2, dim=1)
             features2_norm = F.normalize(features2, p=2, dim=1)
             # Calculate cosine similarity between normalized features
-            latent_similarity = self.cos(features1_norm, features2_norm)
+            cosine_similarity = self.cos(features1_norm, features2_norm)
+            
+            # CRITICAL FIX: Map cosine similarity from [-1,+1] to [0,1] range
+            # to match target similarities from lookup table which are in [0,1]
+            latent_similarity = (cosine_similarity + 1.0) / 2.0
             
             # Handle background pairs
             is_background = (y_true == -1)
