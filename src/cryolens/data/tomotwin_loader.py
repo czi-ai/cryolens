@@ -335,9 +335,21 @@ class SingleStructureTomoTwinDataset(Dataset):
     
     def reload_batch(self):
         """Reload a new random batch file for this structure."""
+        # Add rate limiting to prevent excessive reloading
+        if not hasattr(self, '_last_reload_time'):
+            self._last_reload_time = 0
+        
+        current_time = time.time()
+        min_reload_interval = 30.0  # Minimum 30 seconds between reloads
+        
+        if current_time - self._last_reload_time < min_reload_interval:
+            logger.debug(f"Structure {self.structure_name}: Skipping reload (too soon, last reload {current_time - self._last_reload_time:.1f}s ago)")
+            return
+        
         logger.info(f"Reloading batch for structure {self.structure_name}")
         old_dataset = self.dataset
         self.dataset = self._load_single_batch()
+        self._last_reload_time = current_time
         
         if old_dataset is not None and self.dataset is not None:
             logger.info(f"Structure {self.structure_name}: Reloaded from {len(old_dataset)} to {len(self.dataset)} samples")
