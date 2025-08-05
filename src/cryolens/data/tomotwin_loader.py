@@ -1014,18 +1014,19 @@ def create_tomotwin_dataloader(
     if dist_config is None or dist_config.node_rank == 0:
         logger.info(f"Using {num_workers} workers for dataloader with batch size {per_gpu_batch_size}")
     
-    # Create dataloader with distributed settings
+    # Create dataloader with distributed settings and improved stability
     dataloader = DataLoader(
         dataset,
         batch_size=per_gpu_batch_size,
         shuffle=(sampler is None),  # Only shuffle if not using a sampler
         sampler=sampler,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=True if torch.cuda.is_available() else False,
         persistent_workers=(num_workers > 0),
         drop_last=True,
-        prefetch_factor=2 if num_workers > 0 else None,
-        timeout=300  # Shorter timeout to detect hanging workers
+        prefetch_factor=1 if num_workers > 0 else None,  # Reduced from 2 to 1 for stability
+        timeout=600,  # Increased timeout for better stability
+        multiprocessing_context='spawn' if num_workers > 0 else None  # Use spawn for better error isolation
     )
     
     if rank == 0:
