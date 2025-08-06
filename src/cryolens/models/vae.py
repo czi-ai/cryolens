@@ -414,8 +414,8 @@ class AffinityVAE(nn.Module):
         
         # CRITICAL FIX: Force L2 normalization during evaluation only
         # This ensures consistent similarity calculations during inference
-        if not self.training:
-            mu = F.normalize(mu, p=2, dim=1)
+        # if not self.training:
+        #    mu = F.normalize(mu, p=2, dim=1)
         
         return mu, log_var, pose, global_weight
 
