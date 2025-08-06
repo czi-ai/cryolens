@@ -12,6 +12,7 @@ import traceback
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def fallback_to_cpu(method):
