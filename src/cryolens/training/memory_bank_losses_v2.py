@@ -147,6 +147,58 @@ class TrainingAwareMemoryBank:
         
         return weights
     
+    def crossover_affinity_embeddings(self, labels: torch.Tensor, embeddings: torch.Tensor, 
+                                      crossover_prob: float = 0.3, noise_std: float = 0.01) -> torch.Tensor:
+        """
+        Perform uniform crossover on affinity segment embeddings with memory bank.
+        
+        Since memory bank only stores the affinity segment (first latent_ratio portion),
+        this directly performs crossover on those embeddings to encourage canonical representations.
+        
+        Parameters
+        ----------
+        labels : torch.Tensor
+            Class labels for each embedding
+        embeddings : torch.Tensor
+            Current batch embeddings (affinity segment only)
+        crossover_prob : float
+            Probability of applying crossover to each sample
+        noise_std : float
+            Standard deviation of noise to add after crossover
+            
+        Returns
+        -------
+        torch.Tensor
+            Embeddings with crossover applied
+        """
+        if not self.is_active or not torch.any(self.initialized):
+            return embeddings
+        
+        # Clone to avoid modifying original
+        crossed_embeddings = embeddings.clone()
+        
+        for i in range(labels.shape[0]):
+            label = labels[i].item()
+            if label >= 0 and label < self.num_classes and self.initialized[label]:
+                # Randomly decide whether to crossover this sample
+                if torch.rand(1).item() < crossover_prob:
+                    # Get memory bank embedding for this class (already normalized)
+                    memory_emb = self.embeddings[label]
+                    
+                    # Uniform crossover: randomly select dimensions
+                    # Each dimension has 50% chance to come from memory or current
+                    mask = torch.rand(self.embedding_dim, device=self.device) < 0.5
+                    crossed_embeddings[i] = torch.where(mask, embeddings[i], memory_emb)
+                    
+                    # Add small noise for diversity (mutation)
+                    noise = torch.randn_like(crossed_embeddings[i]) * noise_std
+                    crossed_embeddings[i] = crossed_embeddings[i] + noise
+                    
+                    # Re-normalize after crossover and mutation
+                    crossed_embeddings[i] = F.normalize(crossed_embeddings[i], p=2, dim=0)
+        
+        return crossed_embeddings
+    
     def get_all_initialized_embeddings(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get all initialized embeddings and their indices.
@@ -182,7 +234,9 @@ class ContrastiveAffinityLossWithMemoryV2(nn.Module):
         margin: float = 4.0,
         warmup_steps: int = 1000,
         activation_mode: str = "steps",
-        memory_weight: float = 0.5
+        memory_weight: float = 0.5,
+        crossover_prob: float = 0.0,
+        crossover_noise_std: float = 0.01
     ):
         """
         Initialize improved memory-enhanced contrastive loss.
@@ -203,6 +257,10 @@ class ContrastiveAffinityLossWithMemoryV2(nn.Module):
             "steps" or "epochs" for activation timing
         memory_weight : float
             Weight for memory bank loss vs batch loss
+        crossover_prob : float
+            Probability of crossover with memory bank embeddings (default: 0.0, disabled)
+        crossover_noise_std : float
+            Noise std for crossover mutation (default: 0.01)
         """
         super().__init__()
         
@@ -213,6 +271,8 @@ class ContrastiveAffinityLossWithMemoryV2(nn.Module):
         self.latent_ratio = latent_ratio
         self.margin = margin
         self.memory_weight = memory_weight
+        self.crossover_prob = crossover_prob
+        self.crossover_noise_std = crossover_noise_std
         
         # Background similarity values
         self.background_sim = 0.2
@@ -291,6 +351,14 @@ class ContrastiveAffinityLossWithMemoryV2(nn.Module):
                     y_pred_partial[non_bg_mask],
                     y_true[non_bg_mask]
                 )
+                
+                # Apply crossover if enabled and memory bank is active
+                if self.memory_bank.is_active and self.crossover_prob > 0:
+                    y_pred_partial = self.memory_bank.crossover_affinity_embeddings(
+                        y_true, y_pred_partial,
+                        crossover_prob=self.crossover_prob,
+                        noise_std=self.crossover_noise_std
+                    )
             
             # Standard within-batch loss calculation
             z_id = torch.arange(y_pred_partial.shape[0], device=self.device)
@@ -444,7 +512,9 @@ class AffinityCosineLossWithMemoryV2(nn.Module):
         latent_ratio: float = 0.75,
         warmup_steps: int = 1000,
         activation_mode: str = "steps",
-        memory_weight: float = 0.5
+        memory_weight: float = 0.5,
+        crossover_prob: float = 0.0,
+        crossover_noise_std: float = 0.01
     ):
         """
         Initialize improved memory-enhanced cosine loss.
@@ -463,6 +533,10 @@ class AffinityCosineLossWithMemoryV2(nn.Module):
             "steps" or "epochs" for activation timing
         memory_weight : float
             Weight for memory bank loss vs batch loss
+        crossover_prob : float
+            Probability of crossover with memory bank embeddings (default: 0.0, disabled)
+        crossover_noise_std : float
+            Noise std for crossover mutation (default: 0.01)
         """
         super().__init__()
         
@@ -474,6 +548,8 @@ class AffinityCosineLossWithMemoryV2(nn.Module):
         self.l1loss = nn.L1Loss(reduction="none")
         self.latent_ratio = latent_ratio
         self.memory_weight = memory_weight
+        self.crossover_prob = crossover_prob
+        self.crossover_noise_std = crossover_noise_std
         
         # Background similarity values
         self.background_sim = 0.2
@@ -539,6 +615,14 @@ class AffinityCosineLossWithMemoryV2(nn.Module):
                     y_pred_partial[non_bg_mask],
                     y_true[non_bg_mask]
                 )
+                
+                # Apply crossover if enabled and memory bank is active
+                if self.memory_bank.is_active and self.crossover_prob > 0:
+                    y_pred_partial = self.memory_bank.crossover_affinity_embeddings(
+                        y_true, y_pred_partial,
+                        crossover_prob=self.crossover_prob,
+                        noise_std=self.crossover_noise_std
+                    )
             
             # Standard within-batch loss
             z_id = torch.arange(y_pred_partial.shape[0], device=self.device)
