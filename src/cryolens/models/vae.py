@@ -220,6 +220,8 @@ class AffinityVAE(nn.Module):
         pose_channels: int = 1,
         use_rotated_affinity: bool = False,
         crossover_probability: float = 0.5,
+        use_variational_pose: bool = False,  # NEW: flag to enable variational pose
+        pose_beta: float = 0.001,  # NEW: KL weight for pose
     ):
         super().__init__()
 
@@ -227,12 +229,21 @@ class AffinityVAE(nn.Module):
         self.decoder = decoder
         self.latent_dims = latent_dims
         self.pose_channels = pose_channels
+        self.use_variational_pose = use_variational_pose  # NEW
+        self.pose_beta = pose_beta  # NEW
 
         flat_shape = self.encoder.flat_shape
 
         self.mu = nn.Linear(flat_shape, latent_dims)
         self.log_var = nn.Linear(flat_shape, latent_dims)
-        self.pose = nn.Linear(flat_shape, pose_channels)
+        
+        # MODIFIED: Add pose variance head if variational
+        if use_variational_pose:
+            self.pose_mu = nn.Linear(flat_shape, pose_channels)
+            self.pose_log_var = nn.Linear(flat_shape, pose_channels)
+        else:
+            self.pose = nn.Linear(flat_shape, pose_channels)
+            
         self.global_weight = nn.Linear(flat_shape, 1)
         self.use_rotated_affinity = use_rotated_affinity
         self.crossover_probability = crossover_probability
@@ -389,6 +400,108 @@ class AffinityVAE(nn.Module):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return eps * std + mu
+    
+    def reparameterize_pose(self, pose_mu: torch.Tensor, pose_log_var: torch.Tensor) -> torch.Tensor:
+        """Sample pose with quaternion normalization.
+        
+        Simple approach: sample in R^n then normalize to satisfy constraints.
+        
+        Parameters
+        ----------
+        pose_mu : torch.Tensor
+            Mean of pose distribution.
+        pose_log_var : torch.Tensor
+            Log variance of pose distribution.
+            
+        Returns
+        -------
+        torch.Tensor
+            Sampled pose (normalized for quaternions).
+        """
+        if self.training:
+            # Sample from Gaussian
+            std = torch.exp(0.5 * pose_log_var)
+            eps = torch.randn_like(std)
+            pose_raw = pose_mu + eps * std
+        else:
+            # Use mean at test time
+            pose_raw = pose_mu
+        
+        if self.pose_channels == 4:
+            # Normalize to unit quaternion
+            # First normalize to unit sphere
+            pose = F.normalize(pose_raw, p=2, dim=1)
+            # Ensure canonical form (w >= 0)
+            w = pose[:, 0:1]
+            pose = torch.where(w < 0, -pose, pose)
+            # Convert to axis-angle format that decoder expects
+            pose = self.quaternion_to_axis_angle(pose)
+        else:
+            # For 1D rotation, no normalization needed
+            pose = pose_raw
+            
+        return pose
+    
+    def quaternion_to_axis_angle(self, quat: torch.Tensor) -> torch.Tensor:
+        """Convert unit quaternion to axis-angle representation.
+        
+        Simple version - decoder already handles axis-angle to quaternion conversion.
+        
+        Parameters
+        ----------
+        quat : torch.Tensor
+            Unit quaternions of shape (batch_size, 4) as [w, x, y, z].
+            
+        Returns
+        -------
+        torch.Tensor
+            Axis-angle of shape (batch_size, 4) as [angle, ax, ay, az].
+        """
+        # Extract w and xyz
+        w = quat[:, 0:1]
+        xyz = quat[:, 1:4]
+        
+        # Compute angle
+        w_clamped = torch.clamp(w, min=-1.0, max=1.0)
+        angle = 2.0 * torch.acos(w_clamped)
+        
+        # Compute axis (avoid division by zero)
+        axis_norm = torch.norm(xyz, p=2, dim=1, keepdim=True)
+        axis = torch.where(
+            axis_norm > 1e-6,
+            xyz / (axis_norm + 1e-8),
+            torch.tensor([0.0, 0.0, 1.0], device=xyz.device).expand_as(xyz)
+        )
+        
+        return torch.cat([angle, axis], dim=1)
+    
+    def pose_kl_divergence(self) -> torch.Tensor:
+        """Compute KL divergence for pose distribution.
+        
+        Simple Gaussian KL in tangent space approximation.
+        
+        Returns
+        -------
+        torch.Tensor
+            KL divergence value (scalar).
+        """
+        if not self.use_variational_pose:
+            return torch.tensor(0.0)
+            
+        if not hasattr(self, '_last_pose_mu'):
+            return torch.tensor(0.0)
+            
+        pose_mu = self._last_pose_mu
+        pose_log_var = self._last_pose_log_var
+        
+        # Standard Gaussian KL
+        # Prior is N(0, I)
+        kl = -0.5 * torch.sum(
+            1 + pose_log_var - pose_mu.pow(2) - pose_log_var.exp(),
+            dim=1
+        )
+        
+        return kl.mean()
 
     @fallback_to_cpu
     def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -402,14 +515,30 @@ class AffinityVAE(nn.Module):
         Returns
         -------
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-            Mean, log variance, and pose.
+            Mean, log variance, pose, and global_weight.
         """
-        self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose, self.global_weight)
+        # Ensure components are on same device
+        if self.use_variational_pose:
+            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose_mu, self.pose_log_var, self.global_weight)
+        else:
+            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose, self.global_weight)
         
         encoded = self.encoder(x)
         mu = self.mu(encoded)
         log_var = self.log_var(encoded)
-        pose = self.pose(encoded)
+        
+        # MODIFIED: Handle variational pose
+        if self.use_variational_pose:
+            pose_mu = self.pose_mu(encoded)
+            pose_log_var = self.pose_log_var(encoded)
+            # Sample pose
+            pose = self.reparameterize_pose(pose_mu, pose_log_var)
+            # Store for KL computation
+            self._last_pose_mu = pose_mu
+            self._last_pose_log_var = pose_log_var
+        else:
+            pose = self.pose(encoded)
+            
         global_weight = self.global_weight(encoded)
         
         # CRITICAL FIX: Force L2 normalization during evaluation only
