@@ -553,6 +553,26 @@ class AffinityVAE(nn.Module):
             # Store for KL computation
             self._last_pose_mu = pose_mu
             self._last_pose_log_var = pose_log_var
+            
+            # Debug output during training
+            if self.training and torch.distributed.is_initialized():
+                if torch.distributed.get_rank() == 0:
+                    # Log statistics every 100 steps
+                    if not hasattr(self, '_debug_counter'):
+                        self._debug_counter = 0
+                    self._debug_counter += 1
+                    
+                    if self._debug_counter % 100 == 0:
+                        with torch.no_grad():
+                            print(f"\n[Variational Pose Debug @ step {self._debug_counter}]")
+                            print(f"  pose_mu mean: {pose_mu.mean().item():.4f}, std: {pose_mu.std().item():.4f}")
+                            print(f"  pose_log_var mean: {pose_log_var.mean().item():.4f}, std: {pose_log_var.std().item():.4f}")
+                            print(f"  pose (sampled) mean: {pose.mean().item():.4f}, std: {pose.std().item():.4f}")
+                            if self.pose_channels == 4:
+                                angle = pose[:, 0]
+                                axis_norm = torch.norm(pose[:, 1:4], dim=1)
+                                print(f"  angle mean: {angle.mean().item():.4f}, std: {angle.std().item():.4f}")
+                                print(f"  axis norm mean: {axis_norm.mean().item():.4f}, std: {axis_norm.std().item():.4f}")
         else:
             pose = self.pose(encoded)
             
