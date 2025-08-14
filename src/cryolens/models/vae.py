@@ -270,18 +270,29 @@ class AffinityVAE(nn.Module):
         # Check if any module needs to be moved
         device_mismatch = False
         for module in modules:
-            if next(module.parameters()).device != device:
-                device_mismatch = True
-                break
+            # Skip None modules (for optional components)
+            if module is None:
+                continue
+            if hasattr(module, 'parameters') and callable(module.parameters):
+                # It's a nn.Module with parameters
+                if next(module.parameters(), None) is not None:
+                    if next(module.parameters()).device != device:
+                        device_mismatch = True
+                        break
         
         # If there's a mismatch, move all modules to the tensor's device
         if device_mismatch:
             if rank == 0:
                 print(f"Device mismatch detected. Moving components to {device}")
             for module in modules:
-                module_device = next(module.parameters()).device
-                if module_device != device:
-                    module.to(device)
+                if module is None:
+                    continue
+                if hasattr(module, 'parameters') and callable(module.parameters):
+                    module_params = next(module.parameters(), None)
+                    if module_params is not None:
+                        module_device = module_params.device
+                        if module_device != device:
+                            module.to(device)
         
         return device
 
@@ -303,7 +314,14 @@ class AffinityVAE(nn.Module):
             Reconstructed data, latent representation, pose, mean, and log variance
         """
         # Ensure all components are on the same device as input
-        device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, self.pose)
+        if self.use_variational_pose:
+            # When using variational pose, we have pose_mu and pose_log_var
+            device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, 
+                                             self.pose_mu, self.pose_log_var, self.global_weight)
+        else:
+            # When using deterministic pose, we have pose
+            device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, 
+                                             self.pose, self.global_weight)
         rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         
         if rank == 0:
@@ -519,9 +537,11 @@ class AffinityVAE(nn.Module):
         """
         # Ensure components are on same device
         if self.use_variational_pose:
-            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose_mu, self.pose_log_var, self.global_weight)
+            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+                                   self.pose_mu, self.pose_log_var, self.global_weight)
         else:
-            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose, self.global_weight)
+            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+                                   self.pose, self.global_weight)
         
         encoded = self.encoder(x)
         mu = self.mu(encoded)
