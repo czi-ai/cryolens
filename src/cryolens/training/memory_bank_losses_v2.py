@@ -62,10 +62,18 @@ class TrainingAwareMemoryBank:
         self.current_epoch = current_epoch
         
         # Check if memory bank should be active
+        was_active = self.is_active
         if self.activation_mode == "steps":
             self.is_active = global_step >= self.warmup_steps
         else:  # epochs
             self.is_active = current_epoch >= self.warmup_steps
+        
+        # Log when memory bank becomes active
+        if not was_active and self.is_active:
+            print(f"\n[Memory Bank] ACTIVATED at epoch {current_epoch}, step {global_step}")
+            print(f"  Activation mode: {self.activation_mode}")
+            print(f"  Warmup threshold: {self.warmup_steps} {self.activation_mode}")
+            print(f"  Crossover can now occur with stored embeddings\n")
             
     def get_momentum(self) -> float:
         """Get current momentum value based on training progress."""
@@ -182,6 +190,10 @@ class TrainingAwareMemoryBank:
         # Create output tensor - don't modify input
         crossed_embeddings = torch.empty_like(embeddings)
         
+        # Track crossover statistics
+        crossover_count = 0
+        crossover_classes = []
+        
         for i in range(batch_size):
             label = labels[i].item()
             if label >= 0 and label < self.num_classes and self.initialized[label]:
@@ -203,12 +215,34 @@ class TrainingAwareMemoryBank:
                     
                     # Re-normalize after crossover and mutation
                     crossed_embeddings[i] = F.normalize(crossed_emb, p=2, dim=0)
+                    
+                    # Track statistics
+                    crossover_count += 1
+                    crossover_classes.append(label)
                 else:
                     # No crossover - copy original embedding
                     crossed_embeddings[i] = embeddings[i]
             else:
                 # Invalid label or uninitialized - copy original embedding
                 crossed_embeddings[i] = embeddings[i]
+        
+        # Log crossover statistics periodically (every 100 calls)
+        if not hasattr(self, 'crossover_call_count'):
+            self.crossover_call_count = 0
+            self.total_crossover_count = 0
+            self.total_samples_processed = 0
+        
+        self.crossover_call_count += 1
+        self.total_crossover_count += crossover_count
+        self.total_samples_processed += batch_size
+        
+        if self.crossover_call_count % 100 == 0:
+            crossover_rate = self.total_crossover_count / max(1, self.total_samples_processed)
+            print(f"[Memory Bank Crossover Stats] Calls: {self.crossover_call_count}, "
+                  f"Total crossovers: {self.total_crossover_count}/{self.total_samples_processed} "
+                  f"(rate: {crossover_rate:.3f}), Latest batch: {crossover_count}/{batch_size}")
+            if crossover_classes:
+                print(f"  Classes with crossover in latest batch: {crossover_classes[:10]}{'...' if len(crossover_classes) > 10 else ''}")
         
         return crossed_embeddings
     
