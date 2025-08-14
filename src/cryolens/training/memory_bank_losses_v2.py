@@ -174,28 +174,41 @@ class TrainingAwareMemoryBank:
         if not self.is_active or not torch.any(self.initialized):
             return embeddings
         
-        # Clone to avoid modifying original
-        crossed_embeddings = embeddings.clone()
+        # Detach from computation graph to avoid inplace operation issues
+        # We'll create a new tensor that maintains gradients
+        batch_size = embeddings.shape[0]
+        embedding_dim = embeddings.shape[1]
         
-        for i in range(labels.shape[0]):
+        # Create output tensor - don't modify input
+        crossed_embeddings = torch.empty_like(embeddings)
+        
+        for i in range(batch_size):
             label = labels[i].item()
             if label >= 0 and label < self.num_classes and self.initialized[label]:
                 # Randomly decide whether to crossover this sample
                 if torch.rand(1).item() < crossover_prob:
                     # Get memory bank embedding for this class (already normalized)
-                    memory_emb = self.embeddings[label]
+                    memory_emb = self.embeddings[label].detach()  # Detach memory bank embedding
                     
                     # Uniform crossover: randomly select dimensions
                     # Each dimension has 50% chance to come from memory or current
-                    mask = torch.rand(self.embedding_dim, device=self.device) < 0.5
-                    crossed_embeddings[i] = torch.where(mask, embeddings[i], memory_emb)
+                    mask = torch.rand(embedding_dim, device=self.device) < 0.5
+                    
+                    # Create crossed embedding without inplace operations
+                    crossed_emb = torch.where(mask, embeddings[i], memory_emb)
                     
                     # Add small noise for diversity (mutation)
-                    noise = torch.randn_like(crossed_embeddings[i]) * noise_std
-                    crossed_embeddings[i] = crossed_embeddings[i] + noise
+                    noise = torch.randn(embedding_dim, device=self.device) * noise_std
+                    crossed_emb = crossed_emb + noise
                     
                     # Re-normalize after crossover and mutation
-                    crossed_embeddings[i] = F.normalize(crossed_embeddings[i], p=2, dim=0)
+                    crossed_embeddings[i] = F.normalize(crossed_emb, p=2, dim=0)
+                else:
+                    # No crossover - copy original embedding
+                    crossed_embeddings[i] = embeddings[i]
+            else:
+                # Invalid label or uninitialized - copy original embedding
+                crossed_embeddings[i] = embeddings[i]
         
         return crossed_embeddings
     
