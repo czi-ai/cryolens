@@ -511,7 +511,7 @@ class AffinityVAE(nn.Module):
             # KL for angle (with tighter prior variance of 0.1 to keep rotations small)
             prior_angle_var = 0.1
             angle_kl = -0.5 * torch.sum(
-                1 + angle_log_var - torch.log(torch.tensor(prior_angle_var)) - 
+                1 + angle_log_var - torch.log(torch.tensor(prior_angle_var, device=pose_mu.device)) - 
                 angle_mu.pow(2) / prior_angle_var - angle_log_var.exp() / prior_angle_var,
                 dim=1
             )
