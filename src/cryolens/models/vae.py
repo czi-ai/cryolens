@@ -241,8 +241,22 @@ class AffinityVAE(nn.Module):
         if use_variational_pose:
             self.pose_mu = nn.Linear(flat_shape, pose_channels)
             self.pose_log_var = nn.Linear(flat_shape, pose_channels)
+            
+            # Initialize pose networks with small values to start near identity rotation
+            with torch.no_grad():
+                # Initialize mean close to zero (identity rotation)
+                nn.init.normal_(self.pose_mu.weight, mean=0.0, std=0.01)
+                nn.init.zeros_(self.pose_mu.bias)
+                
+                # Initialize log_var to small negative values (low initial variance)
+                nn.init.constant_(self.pose_log_var.weight, 0.0)
+                nn.init.constant_(self.pose_log_var.bias, -3.0)  # exp(-3) ≈ 0.05 initial std
         else:
             self.pose = nn.Linear(flat_shape, pose_channels)
+            # Initialize deterministic pose close to zero as well
+            with torch.no_grad():
+                nn.init.normal_(self.pose.weight, mean=0.0, std=0.01)
+                nn.init.zeros_(self.pose.bias)
             
         self.global_weight = nn.Linear(flat_shape, 1)
         self.use_rotated_affinity = use_rotated_affinity
