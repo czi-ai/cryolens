@@ -420,9 +420,10 @@ class AffinityVAE(nn.Module):
         return eps * std + mu
     
     def reparameterize_pose(self, pose_mu: torch.Tensor, pose_log_var: torch.Tensor) -> torch.Tensor:
-        """Sample pose with quaternion normalization.
+        """Sample pose with proper handling for axis-angle representation.
         
-        Simple approach: sample in R^n then normalize to satisfy constraints.
+        For quaternion/axis-angle: sample directly in axis-angle space to avoid
+        double conversion issues.
         
         Parameters
         ----------
@@ -434,69 +435,41 @@ class AffinityVAE(nn.Module):
         Returns
         -------
         torch.Tensor
-            Sampled pose (normalized for quaternions).
+            Sampled pose in axis-angle format.
         """
         if self.training:
             # Sample from Gaussian
             std = torch.exp(0.5 * pose_log_var)
             eps = torch.randn_like(std)
-            pose_raw = pose_mu + eps * std
+            pose = pose_mu + eps * std
         else:
             # Use mean at test time
-            pose_raw = pose_mu
+            pose = pose_mu
         
         if self.pose_channels == 4:
-            # Normalize to unit quaternion
-            # First normalize to unit sphere
-            pose = F.normalize(pose_raw, p=2, dim=1)
-            # Ensure canonical form (w >= 0)
-            w = pose[:, 0:1]
-            pose = torch.where(w < 0, -pose, pose)
-            # Convert to axis-angle format that decoder expects
-            pose = self.quaternion_to_axis_angle(pose)
+            # Interpret as axis-angle directly [angle, ax, ay, az]
+            # Normalize the axis part to unit vector
+            angle = pose[:, 0:1]  # Keep angle as is
+            axis = pose[:, 1:4]    # Extract axis
+            
+            # Normalize axis to unit vector (with small epsilon for stability)
+            axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
+            
+            # Recombine angle and normalized axis
+            pose = torch.cat([angle, axis], dim=1)
         else:
             # For 1D rotation, no normalization needed
-            pose = pose_raw
+            pass
             
         return pose
     
-    def quaternion_to_axis_angle(self, quat: torch.Tensor) -> torch.Tensor:
-        """Convert unit quaternion to axis-angle representation.
-        
-        Simple version - decoder already handles axis-angle to quaternion conversion.
-        
-        Parameters
-        ----------
-        quat : torch.Tensor
-            Unit quaternions of shape (batch_size, 4) as [w, x, y, z].
-            
-        Returns
-        -------
-        torch.Tensor
-            Axis-angle of shape (batch_size, 4) as [angle, ax, ay, az].
-        """
-        # Extract w and xyz
-        w = quat[:, 0:1]
-        xyz = quat[:, 1:4]
-        
-        # Compute angle
-        w_clamped = torch.clamp(w, min=-1.0, max=1.0)
-        angle = 2.0 * torch.acos(w_clamped)
-        
-        # Compute axis (avoid division by zero)
-        axis_norm = torch.norm(xyz, p=2, dim=1, keepdim=True)
-        axis = torch.where(
-            axis_norm > 1e-6,
-            xyz / (axis_norm + 1e-8),
-            torch.tensor([0.0, 0.0, 1.0], device=xyz.device).expand_as(xyz)
-        )
-        
-        return torch.cat([angle, axis], dim=1)
+    # REMOVED: quaternion_to_axis_angle method is no longer needed
+    # since we're working directly in axis-angle space
     
     def pose_kl_divergence(self) -> torch.Tensor:
         """Compute KL divergence for pose distribution.
         
-        Simple Gaussian KL in tangent space approximation.
+        KL divergence for axis-angle representation with proper scaling.
         
         Returns
         -------
@@ -504,20 +477,44 @@ class AffinityVAE(nn.Module):
             KL divergence value (scalar).
         """
         if not self.use_variational_pose:
-            return torch.tensor(0.0)
+            return torch.tensor(0.0, device=self.mu.weight.device)
             
         if not hasattr(self, '_last_pose_mu'):
-            return torch.tensor(0.0)
+            return torch.tensor(0.0, device=self.mu.weight.device)
             
         pose_mu = self._last_pose_mu
         pose_log_var = self._last_pose_log_var
         
-        # Standard Gaussian KL
-        # Prior is N(0, I)
-        kl = -0.5 * torch.sum(
-            1 + pose_log_var - pose_mu.pow(2) - pose_log_var.exp(),
-            dim=1
-        )
+        # Standard Gaussian KL for axis-angle representation
+        # Prior is N(0, I) - but we may want to use a tighter prior for the angle component
+        if self.pose_channels == 4:
+            # Separate KL for angle and axis components
+            angle_mu = pose_mu[:, 0:1]
+            angle_log_var = pose_log_var[:, 0:1]
+            axis_mu = pose_mu[:, 1:4]
+            axis_log_var = pose_log_var[:, 1:4]
+            
+            # KL for angle (with tighter prior variance of 0.1 to keep rotations small)
+            prior_angle_var = 0.1
+            angle_kl = -0.5 * torch.sum(
+                1 + angle_log_var - torch.log(torch.tensor(prior_angle_var)) - 
+                angle_mu.pow(2) / prior_angle_var - angle_log_var.exp() / prior_angle_var,
+                dim=1
+            )
+            
+            # KL for axis (standard N(0,I) prior)
+            axis_kl = -0.5 * torch.sum(
+                1 + axis_log_var - axis_mu.pow(2) - axis_log_var.exp(),
+                dim=1
+            )
+            
+            kl = angle_kl + axis_kl
+        else:
+            # Standard Gaussian KL for 1D rotation
+            kl = -0.5 * torch.sum(
+                1 + pose_log_var - pose_mu.pow(2) - pose_log_var.exp(),
+                dim=1
+            )
         
         return kl.mean()
 
