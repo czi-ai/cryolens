@@ -255,9 +255,6 @@ class VisualizationCallback(Callback):
         self.config = config or VisualizationConfig()
         self.plotter = VisualizationPlotter(self.config)
         self.samples_per_mol_per_source = getattr(self.config, 'samples_per_mol_per_source', 5)
-        # Number of structures to visualize (first N + random M)
-        self.num_first_structures = 4
-        self.num_random_structures = 6
         # Store rank to ensure only rank 0 saves visualizations
         self.rank = rank
         
