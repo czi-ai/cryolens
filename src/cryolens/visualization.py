@@ -424,6 +424,12 @@ class VisualizationCallback(Callback):
                     if pose_error is not None:
                         sample_data['pose_error'] = pose_error
                     
+                    # Add outputs with ground truth pose if available
+                    if output_with_gt_pose is not None:
+                        sample_data['output_gt_pose'] = output_with_gt_pose[0].cpu().numpy()
+                    if raw_splats_with_gt_pose is not None:
+                        sample_data['raw_splats_gt_pose'] = raw_splats_with_gt_pose[0].cpu().numpy()
+                    
                     # Now get the separate segments without convolution
                     try:
                         if hasattr(pl_module.model.decoder, 'affinity_segment_size'):
