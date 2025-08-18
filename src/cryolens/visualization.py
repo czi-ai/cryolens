@@ -229,7 +229,13 @@ class VisualizationCallback(Callback):
                 # Process samples for this molecule and source
                 for idx in indices:
                     # Get sample directly using the memoized index
-                    subvolume, mol_id, _ = dataset.get_sample_by_index(idx)
+                    sample_data = dataset.get_sample_by_index(idx)
+                    # Handle both 2-value and 3-value returns (with and without pose)
+                    if len(sample_data) == 3:
+                        subvolume, mol_id, pose_data = sample_data
+                    else:
+                        subvolume, mol_id = sample_data
+                        pose_data = None
                     
                     # Skip if molecule ID is invalid
                     if mol_id == -1:
