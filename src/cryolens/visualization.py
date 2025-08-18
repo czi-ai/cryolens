@@ -101,7 +101,7 @@ class VisualizationPlotter:
             fig_width = self.config.fig_width
         
         # Create figure and grid with appropriate spacing
-        fig = plt.figure(figsize=(self.config.fig_width, fig_height))
+        fig = plt.figure(figsize=(fig_width, fig_height))
         gs = fig.add_gridspec(n_rows, n_cols, 
                             hspace=0.3,
                             wspace=0.1)
