@@ -156,6 +156,10 @@ class VisualizationPlotter:
             
             # Plot second row
             self._plot_volumes(fig, gs, row2_volumes, sample_base_row + 1, row_label="Row 2")
+            
+            # Plot third row if we have GT pose comparisons
+            if has_pose_comparisons and 'output_gt_pose' in sample:
+                self._plot_volumes(fig, gs, row3_volumes, sample_base_row + 2, row_label="Row 3")
     
     def _plot_volumes(self, fig: plt.Figure, gs: plt.GridSpec, 
                      volumes: Dict, row: int, source_label: str = None, row_label: str = None,
