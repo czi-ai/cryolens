@@ -250,19 +250,29 @@ class VisualizationCallback(Callback):
                         pose_data = None
                         source_type = None
                         
-                        if len(sample_data) == 3:
-                            # No pose data: (volume, mol_id, source_type)
-                            subvolume, mol_id, source_type = sample_data
-                        elif len(sample_data) == 4:
+                        if dataset_has_poses and len(sample_data) == 4:
                             # With pose data: (volume, mol_id, pose, source_type)
                             subvolume, mol_id, pose_data, source_type = sample_data
+                        elif not dataset_has_poses and len(sample_data) == 3:
+                            # No pose data: (volume, mol_id, source_type)
+                            subvolume, mol_id, source_type = sample_data
+                        elif len(sample_data) == 3 and dataset_has_poses:
+                            # Edge case: poses enabled but this sample doesn't have pose
+                            # This shouldn't happen with our fixes but handle it anyway
+                            subvolume, mol_id, source_type = sample_data
+                            pose_data = None
+                        elif len(sample_data) == 4 and not dataset_has_poses:
+                            # Edge case: poses disabled but got 4 values anyway
+                            # Take what we need
+                            subvolume, mol_id, _, source_type = sample_data
                         else:
                             # Unexpected format
-                            print(f"Warning: Unexpected sample format with {len(sample_data)} values")
+                            print(f"Warning: Unexpected sample format with {len(sample_data)} values (dataset_has_poses={dataset_has_poses})")
                             continue
                     except ValueError as e:
                         print(f"Warning: Error collecting visualization sample: {e}")
                         print(f"  Sample data length: {len(sample_data) if 'sample_data' in locals() else 'unknown'}")
+                        print(f"  dataset_has_poses: {dataset_has_poses}")
                         continue
                     
                     # Skip if molecule ID is invalid
