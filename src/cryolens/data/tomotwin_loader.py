@@ -879,7 +879,15 @@ class TomoTwinDataset(Dataset):
                     # Get a random index
                     try:
                         rand_idx = random.randrange(self.total_items)
-                        volume, mol_id = self.dataset[rand_idx]
+                        # Handle both 2-value and 3-value returns from dataset
+                        sample = self.dataset[rand_idx]
+                        
+                        if len(sample) == 3:
+                            # With pose: (volume, mol_id, pose)
+                            volume, mol_id, pose = sample
+                        else:
+                            # Without pose: (volume, mol_id)
+                            volume, mol_id = sample
                         
                         # Check if this is the structure we want
                         if mol_id.item() == idx and rand_idx not in indices:
@@ -891,6 +899,11 @@ class TomoTwinDataset(Dataset):
                 # Add to our visualization samples dict
                 if indices:
                     visualization_samples[key] = indices
+                    
+            # Log statistics about collected samples
+            total_samples = sum(len(indices) for indices in visualization_samples.values())
+            logger.info(f"Collected {total_samples} visualization samples across {len(visualization_samples)} structures")
+            
         except Exception as e:
             logger.error(f"Error in get_visualization_samples: {str(e)}")
         
