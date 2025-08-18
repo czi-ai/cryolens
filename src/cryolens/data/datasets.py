@@ -290,6 +290,8 @@ class CachedParquetDataset(Dataset):
                         orientation_np = np.frombuffer(orientation_bytes, dtype=np.float64)
                         # Ensure it's 4 values: [angle, ax, ay, az]
                         if len(orientation_np) == 4:
+                            # Make a copy to ensure the array is writable
+                            orientation_np = orientation_np.copy()
                             orientation = torch.from_numpy(orientation_np).float()
                         else:
                             if track_item:
