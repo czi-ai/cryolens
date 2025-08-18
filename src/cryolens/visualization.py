@@ -610,6 +610,11 @@ class VisualizationCallback(Callback):
     
     def _create_standard_visualization(self, all_samples, epoch, viz_dir, pl_module):
         """Create a standard visualization with all samples"""
+        # Skip if no samples collected
+        if not all_samples or len(all_samples) == 0:
+            print(f"Warning: No samples collected for visualization at epoch {epoch}")
+            return
+            
         # Create visualization
         fig, gs = self.plotter.setup_figure(len(all_samples))
         
