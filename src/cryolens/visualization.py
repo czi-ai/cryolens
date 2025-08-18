@@ -185,6 +185,11 @@ class VisualizationCallback(Callback):
         """Collect samples using memoized visualization samples, limiting to a subset of structures"""
         all_samples = defaultdict(list)
         
+        # Check if dataset has visualization samples support
+        if not hasattr(dataset, 'get_visualization_samples'):
+            logger.warning("Dataset does not support get_visualization_samples, skipping visualization")
+            return all_samples
+        
         # Get memoized visualization samples
         viz_samples = dataset.get_visualization_samples(self.samples_per_mol_per_source)
         
@@ -228,8 +233,33 @@ class VisualizationCallback(Callback):
                     
                 # Process samples for this molecule and source
                 for idx in indices:
+                try:
                     # Get sample directly using the memoized index
-                    subvolume, mol_id, _ = dataset.get_sample_by_index(idx)
+                    if hasattr(dataset, 'get_sample_by_index'):
+                        sample_data_tuple = dataset.get_sample_by_index(idx)
+                        
+                        # Handle both 2-value and 3-value returns
+                        if len(sample_data_tuple) == 3:
+                            subvolume, mol_id, source_info = sample_data_tuple
+                        else:
+                            subvolume, mol_id = sample_data_tuple
+                            source_info = 'unknown'
+                    else:
+                        # Fallback for datasets without get_sample_by_index
+                        # Just use regular indexing
+                        sample_data_tuple = dataset[idx]
+                        if len(sample_data_tuple) == 3:
+                            subvolume, mol_id, orientation = sample_data_tuple
+                            source_info = 'unknown'
+                        elif len(sample_data_tuple) == 2:
+                            subvolume, mol_id = sample_data_tuple
+                            source_info = 'unknown'
+                        else:
+                            logger.warning(f"Unexpected return from dataset[{idx}]: {len(sample_data_tuple)} values")
+                            continue
+                except Exception as e:
+                    logger.warning(f"Error collecting visualization sample: {str(e)}")
+                    continue
                     
                     # Skip if molecule ID is invalid
                     if mol_id == -1:
@@ -241,7 +271,17 @@ class VisualizationCallback(Callback):
                     
                     # Get standard output
                     output = pl_module(subvolume.unsqueeze(0))  # Add batch dimension
-                    reconstructed, z, generated_pose, global_weight, mu, log_var = output
+                    
+                    # Handle different output formats (with or without orientation)
+                    if len(output) == 6:
+                        reconstructed, z, generated_pose, global_weight, mu, log_var = output
+                    else:
+                        # Older format without some values
+                        reconstructed, z = output[:2]
+                        generated_pose = output[2] if len(output) > 2 else None
+                        global_weight = output[3] if len(output) > 3 else None
+                        mu = output[4] if len(output) > 4 else None
+                        log_var = output[5] if len(output) > 5 else None
                     
                     # Use generated pose if none returned from forward pass
                     pose = generated_pose
