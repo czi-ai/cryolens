@@ -192,6 +192,11 @@ class VisualizationCallback(Callback):
         # Get memoized visualization samples
         viz_samples = dataset.get_visualization_samples(self.samples_per_mol_per_source)
         
+        # Check if we got any samples
+        if not viz_samples:
+            print(f"Warning: No visualization samples returned from dataset")
+            return all_samples
+        
         # Limit to a subset of structures to improve performance
         # Group by structure (source_type)
         structures = set(source for _, source in viz_samples.keys())
