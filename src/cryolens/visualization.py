@@ -7,6 +7,7 @@ from pytorch_lightning.callbacks import Callback
 from itertools import islice
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
+import traceback
 
 @dataclass
 class VisualizationConfig:
