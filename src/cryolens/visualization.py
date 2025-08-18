@@ -222,7 +222,7 @@ class VisualizationCallback(Callback):
         
         with torch.no_grad():
             # Process each (mol_idx, source_type) group
-            for (mol_idx, source_type), indices in viz_samples.items():
+            for (mol_idx, source_type_key), indices in viz_samples.items():
                 if mol_idx < 0:  # Skip background or unknown
                     continue
                     
