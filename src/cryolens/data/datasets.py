@@ -284,14 +284,23 @@ class CachedParquetDataset(Dataset):
             if hasattr(self, 'return_poses') and self.return_poses and hasattr(self, 'pose_column'):
                 pose_data = snr_data.get(self.pose_column, None)
                 if pose_data is not None:
-                    if isinstance(pose_data, bytes):
-                        pose = np.frombuffer(pose_data, dtype=np.float32)
-                    else:
-                        pose = np.array(pose_data, dtype=np.float32)
-                    
-                    # Convert to tensor
-                    pose = torch.from_numpy(pose).to(dtype=torch.float32)
-                    return subvolume, torch.tensor(molecule_idx, dtype=torch.long), pose
+                    try:
+                        if isinstance(pose_data, bytes):
+                            pose = np.frombuffer(pose_data, dtype=np.float32)
+                        else:
+                            pose = np.array(pose_data, dtype=np.float32)
+                        
+                        # Ensure pose has correct shape (should be 4 values for axis-angle)
+                        if pose.shape[0] != 4:
+                            print(f"WARNING: Pose has shape {pose.shape}, expected 4 values")
+                            pose = None
+                        else:
+                            # Convert to tensor
+                            pose = torch.from_numpy(pose).to(dtype=torch.float32)
+                            return subvolume, torch.tensor(molecule_idx, dtype=torch.long), pose
+                    except Exception as e:
+                        print(f"Error processing pose data: {e}")
+                        # Fall through to return without pose
             
             return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
                 
