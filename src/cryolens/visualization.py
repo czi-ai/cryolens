@@ -308,6 +308,12 @@ class VisualizationCallback(Callback):
                         segment_free_conv = None
                     
                     # Create sample data with all components
+                    # Use mol_idx and original source_type from viz_samples key if source_type wasn't in sample data
+                    if source_type is None:
+                        # Use the source_type from the viz_samples key we're iterating over
+                        _, source_type_from_key = (mol_idx, source_type)
+                        source_type = source_type_from_key
+                    
                     sample_data = {
                         'input': subvolume.cpu().numpy(),
                         'raw_splats': raw_splats[0].cpu().numpy(),
