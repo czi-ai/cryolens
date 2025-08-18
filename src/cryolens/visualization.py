@@ -187,24 +187,27 @@ class VisualizationPlotter:
                               fontsize=6, va='top', ha='left', 
                               bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7))
                     
-                    # Add pose information if available
-                    if pose_info and vol_idx == 0:  # Only show on first volume
+                    # Add pose information if available (show in center view for better visibility)
+                    if pose_info and view_idx == 1 and vol_idx == 0:  # Center view, first volume
                         pose_text = []
-                        if 'true_pose' in pose_info:
+                        if 'true_pose' in pose_info and pose_info['true_pose'] is not None:
                             true_pose = pose_info['true_pose']
-                            if true_pose is not None:
-                                pose_text.append(f"GT: [{true_pose[0]:.2f}, {true_pose[1]:.2f}, {true_pose[2]:.2f}, {true_pose[3]:.2f}]")
-                        if 'pred_pose' in pose_info:
+                            # Format as angle (degrees) for readability
+                            angle_deg = np.degrees(true_pose[0]) if isinstance(true_pose, np.ndarray) else 0
+                            pose_text.append(f"GT: {angle_deg:.1f}°")
+                        if 'pred_pose' in pose_info and pose_info['pred_pose'] is not None:
                             pred_pose = pose_info['pred_pose']
-                            if pred_pose is not None:
-                                pose_text.append(f"Pred: [{pred_pose[0]:.2f}, {pred_pose[1]:.2f}, {pred_pose[2]:.2f}, {pred_pose[3]:.2f}]")
-                        if 'pose_error' in pose_info:
-                            pose_text.append(f"Error: {pose_info['pose_error']:.3f} rad")
+                            angle_deg = np.degrees(pred_pose[0]) if isinstance(pred_pose, np.ndarray) else 0
+                            pose_text.append(f"Pred: {angle_deg:.1f}°")
+                        if 'pose_error' in pose_info and pose_info['pose_error'] is not None:
+                            error_deg = np.degrees(pose_info['pose_error'])
+                            pose_text.append(f"Err: {error_deg:.1f}°")
                         
                         if pose_text:
-                            ax.text(0.02, 0.02, '\n'.join(pose_text), transform=ax.transAxes,
-                                  fontsize=5, va='bottom', ha='left',
-                                  bbox=dict(boxstyle='round,pad=0.2', fc='yellow', alpha=0.7))
+                            # Place at bottom of image with better contrast
+                            ax.text(0.5, 0.02, ' | '.join(pose_text), transform=ax.transAxes,
+                                  fontsize=7, va='bottom', ha='center',
+                                  bbox=dict(boxstyle='round,pad=0.3', fc='white', ec='black', alpha=0.8))
                 
                 # First time through, add view labels to the top of each column
                 if row == 0:
