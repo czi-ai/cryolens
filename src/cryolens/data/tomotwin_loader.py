@@ -923,24 +923,32 @@ class TomoTwinDataset(Dataset):
         Returns
         -------
         tuple
-            (volume, molecule_id, source_type) or (volume, molecule_id, pose, source_type) if return_poses is True
+            Always returns (volume, molecule_id, source_type) when return_poses is False
+            or (volume, molecule_id, pose, source_type) when return_poses is True
         """
         try:
             if self.dataset is None or idx >= self.total_items:
                 default_shape = (1, self.box_size, self.box_size, self.box_size)
+                default_volume = torch.zeros(default_shape, dtype=torch.float32)
+                default_mol_id = torch.tensor(-1, dtype=torch.long)
+                
                 if self.return_poses:
-                    return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), None, "unknown"
+                    # Return 4 values with None pose
+                    return default_volume, default_mol_id, None, "unknown"
                 else:
-                    return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), "unknown"
+                    # Return 3 values without pose
+                    return default_volume, default_mol_id, "unknown"
             
             # Get the sample from the dataset
             sample = self.dataset[idx]
             
-            # Handle both 2-value and 3-value returns
+            # Handle both 2-value and 3-value returns from wrapped datasets
             pose = None
             if len(sample) == 3:
+                # Dataset returned pose
                 volume, mol_id, pose = sample
             else:
+                # Dataset didn't return pose
                 volume, mol_id = sample
             
             # Try to determine the source type/structure name from the molecule ID
@@ -950,16 +958,24 @@ class TomoTwinDataset(Dataset):
                     source_type = struct_name
                     break
             
-            # Return with or without pose based on what we received
-            if pose is not None:
+            # Return consistently based on whether poses are enabled
+            if self.return_poses:
+                # Always return 4 values when poses are enabled
                 return volume, mol_id, pose, source_type
             else:
+                # Always return 3 values when poses are disabled
                 return volume, mol_id, source_type
             
         except Exception as e:
             logger.error(f"Error in get_sample_by_index: {str(e)}")
             default_shape = (1, self.box_size, self.box_size, self.box_size)
-            return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), "unknown"
+            default_volume = torch.zeros(default_shape, dtype=torch.float32)
+            default_mol_id = torch.tensor(-1, dtype=torch.long)
+            
+            if self.return_poses:
+                return default_volume, default_mol_id, None, "unknown"
+            else:
+                return default_volume, default_mol_id, "unknown"
 
 
 def create_tomotwin_dataloader(
