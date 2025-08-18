@@ -134,8 +134,9 @@ class VisualizationPlotter:
             self._plot_volumes(fig, gs, row2_volumes, sample_base_row + 1, row_label="Row 2")
     
     def _plot_volumes(self, fig: plt.Figure, gs: plt.GridSpec, 
-                     volumes: Dict, row: int, source_label: str = None, row_label: str = None) -> None:
-        """Plot volume projections with source type information"""
+                     volumes: Dict, row: int, source_label: str = None, row_label: str = None,
+                     pose_info: Dict = None) -> None:
+        """Plot volume projections with source type and pose information"""
         for vol_idx, (vol_name, vol_data) in enumerate(volumes.items()):
             projections = VolumeProjector.get_projections(vol_data)
             base_col = vol_idx * 3
@@ -156,6 +157,25 @@ class VisualizationPlotter:
                         ax.text(0.02, 0.98, source_label, transform=ax.transAxes,
                               fontsize=6, va='top', ha='left', 
                               bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7))
+                    
+                    # Add pose information if available
+                    if pose_info and vol_idx == 0:  # Only show on first volume
+                        pose_text = []
+                        if 'true_pose' in pose_info:
+                            true_pose = pose_info['true_pose']
+                            if true_pose is not None:
+                                pose_text.append(f"GT: [{true_pose[0]:.2f}, {true_pose[1]:.2f}, {true_pose[2]:.2f}, {true_pose[3]:.2f}]")
+                        if 'pred_pose' in pose_info:
+                            pred_pose = pose_info['pred_pose']
+                            if pred_pose is not None:
+                                pose_text.append(f"Pred: [{pred_pose[0]:.2f}, {pred_pose[1]:.2f}, {pred_pose[2]:.2f}, {pred_pose[3]:.2f}]")
+                        if 'pose_error' in pose_info:
+                            pose_text.append(f"Error: {pose_info['pose_error']:.3f} rad")
+                        
+                        if pose_text:
+                            ax.text(0.02, 0.02, '\n'.join(pose_text), transform=ax.transAxes,
+                                  fontsize=5, va='bottom', ha='left',
+                                  bbox=dict(boxstyle='round,pad=0.2', fc='yellow', alpha=0.7))
                 
                 # First time through, add view labels to the top of each column
                 if row == 0:
