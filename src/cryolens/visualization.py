@@ -390,6 +390,14 @@ class VisualizationCallback(Callback):
                         'source_type': source_type
                     }
                     
+                    # Add pose information if available
+                    if pose_data is not None:
+                        sample_data['true_pose'] = pose_data.cpu().numpy() if isinstance(pose_data, torch.Tensor) else pose_data
+                    if pose is not None:
+                        sample_data['pred_pose'] = pose[0].cpu().numpy() if pose.dim() > 1 else pose.cpu().numpy()
+                    if pose_error is not None:
+                        sample_data['pose_error'] = pose_error
+                    
                     # Now get the separate segments without convolution
                     try:
                         if hasattr(pl_module.model.decoder, 'affinity_segment_size'):
