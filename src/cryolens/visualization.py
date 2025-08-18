@@ -308,11 +308,12 @@ class VisualizationCallback(Callback):
                         segment_free_conv = None
                     
                     # Create sample data with all components
-                    # Use mol_idx and original source_type from viz_samples key if source_type wasn't in sample data
+                    # Note: source_type comes from the loop variable if not in sample data
                     if source_type is None:
-                        # Use the source_type from the viz_samples key we're iterating over
-                        _, source_type_from_key = (mol_idx, source_type)
-                        source_type = source_type_from_key
+                        # The viz_samples loop already provides source_type
+                        # It's the second element of the key: (mol_idx, source_type)
+                        # We can access it from the outer loop
+                        source_type = list(viz_samples.keys())[list(viz_samples.values()).index(indices)][1]
                     
                     sample_data = {
                         'input': subvolume.cpu().numpy(),
