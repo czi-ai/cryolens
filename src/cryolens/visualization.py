@@ -276,28 +276,35 @@ class VisualizationCallback(Callback):
             print(f"Warning: No visualization samples returned from dataset")
             return all_samples
         
-        # Limit to a subset of structures to improve performance
+        # Limit to a subset of structures to improve performance and prevent oversized figures
+        # When poses are enabled, use fewer structures due to extra row
+        max_structures = 5 if dataset_has_poses else 8
+        
         # Group by structure (source_type)
         structures = set(source for _, source in viz_samples.keys())
         structures = list(structures)
         
-        # Select subset of structures (first N + random M)
+        # Select subset of structures
         selected_structures = []
-        if len(structures) <= (self.num_first_structures + self.num_random_structures):
+        if len(structures) <= max_structures:
             # If we have fewer structures than the limit, use all of them
             selected_structures = structures
         else:
-            # Take the first N structures
-            selected_structures.extend(structures[:self.num_first_structures])
+            # Take the first N structures plus some random ones
+            num_first = min(3, max_structures // 2)
+            num_random = max_structures - num_first
             
-            # Take M random structures from the remaining ones
-            remaining = structures[self.num_first_structures:]
-            random_selection = np.random.choice(
-                remaining, 
-                size=self.num_random_structures, 
-                replace=False
-            )
-            selected_structures.extend(random_selection)
+            selected_structures.extend(structures[:num_first])
+            
+            # Take random structures from the remaining ones
+            remaining = structures[num_first:]
+            if num_random > 0 and remaining:
+                random_selection = np.random.choice(
+                    remaining, 
+                    size=min(num_random, len(remaining)), 
+                    replace=False
+                )
+                selected_structures.extend(random_selection)
         
         # Filter viz_samples to only include selected structures
         filtered_viz_samples = {}
