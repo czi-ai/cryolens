@@ -62,6 +62,10 @@ class VisualizationPlotter:
         n_rows = n_molecules * self.config.max_samples_per_mol * rows_per_sample
         n_cols = 9  # 3 types per row * 3 views
         
+        # Safety check: limit figure size to prevent matplotlib error
+        # Maximum pixels: 65536 (2^16) in each direction
+        max_pixels = 65000  # Leave some margin
+        
         # Calculate figure dimensions maintaining reasonable proportions
         # Base the figure size on the desired width of each subplot
         desired_subplot_width = 1.5  # inches
@@ -76,6 +80,25 @@ class VisualizationPlotter:
         
         # Calculate total figure height
         fig_height = subplot_height * n_rows
+        
+        # Check if figure would be too large
+        estimated_height_pixels = fig_height * self.config.dpi
+        estimated_width_pixels = self.config.fig_width * self.config.dpi
+        
+        if estimated_height_pixels > max_pixels:
+            # Scale down the figure to fit within limits
+            max_height_inches = max_pixels / self.config.dpi
+            print(f"Warning: Figure height ({fig_height:.1f} inches, {estimated_height_pixels:.0f} pixels) exceeds limit.")
+            print(f"         Scaling down to {max_height_inches:.1f} inches.")
+            fig_height = max_height_inches
+            
+        if estimated_width_pixels > max_pixels:
+            # This is less likely but check anyway
+            max_width_inches = max_pixels / self.config.dpi
+            print(f"Warning: Figure width exceeds limit. Scaling down to {max_width_inches:.1f} inches.")
+            fig_width = max_width_inches
+        else:
+            fig_width = self.config.fig_width
         
         # Create figure and grid with appropriate spacing
         fig = plt.figure(figsize=(self.config.fig_width, fig_height))
