@@ -6,7 +6,7 @@ from collections import defaultdict
 from pytorch_lightning.callbacks import Callback
 from itertools import islice
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 @dataclass
 class VisualizationConfig:
