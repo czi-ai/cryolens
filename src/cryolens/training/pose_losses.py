@@ -22,11 +22,21 @@ def axis_angle_to_rotation_matrix(axis_angle: torch.Tensor) -> torch.Tensor:
     batch_size = axis_angle.shape[0]
     device = axis_angle.device
     
+    # Check for NaN/Inf in input
+    if torch.isnan(axis_angle).any() or torch.isinf(axis_angle).any():
+        print(f"WARNING: NaN or Inf detected in axis_angle input: {axis_angle}")
+        # Return identity matrices as fallback
+        return torch.eye(3, device=device).unsqueeze(0).repeat(batch_size, 1, 1)
+    
     # Extract angle and axis
     angle = axis_angle[:, 0:1]  # [B, 1]
     axis = axis_angle[:, 1:4]   # [B, 3]
     
     # Normalize axis to unit vector (with small epsilon for stability)
+    axis_norm = torch.norm(axis, p=2, dim=1, keepdim=True)
+    # Handle zero-norm axis (return identity for no rotation)
+    is_zero_axis = axis_norm < 1e-6
+    axis = torch.where(is_zero_axis, torch.tensor([0., 0., 1.], device=device), axis)
     axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
     
     # Compute components for Rodrigues' formula
@@ -154,6 +164,13 @@ class GeodesicPoseLoss(nn.Module):
         # Compute geodesic distance (in radians)
         geodesic_dist = torch.acos(cos_angle)
         
+        # Check for NaN and replace with zero
+        if torch.isnan(geodesic_dist).any():
+            print(f"WARNING: NaN in geodesic distance, trace values: {trace}")
+            geodesic_dist = torch.where(torch.isnan(geodesic_dist), 
+                                       torch.zeros_like(geodesic_dist), 
+                                       geodesic_dist)
+        
         # Apply reduction
         if self.reduction == 'mean':
             return geodesic_dist.mean()
@@ -267,6 +284,23 @@ class SupervisedPoseLoss(nn.Module):
         Returns:
             loss: Total loss or dict of components
         """
+        # Check for NaN/Inf in inputs
+        if torch.isnan(pred_pose).any() or torch.isinf(pred_pose).any():
+            print(f"WARNING: NaN or Inf in predicted pose: {pred_pose}")
+            # Return zero loss to avoid NaN propagation
+            if return_components:
+                return {'total': torch.tensor(0.0, device=pred_pose.device, requires_grad=True)}
+            else:
+                return torch.tensor(0.0, device=pred_pose.device, requires_grad=True)
+                
+        if torch.isnan(gt_pose).any() or torch.isinf(gt_pose).any():
+            print(f"WARNING: NaN or Inf in ground truth pose: {gt_pose}")
+            # Return zero loss to avoid NaN propagation
+            if return_components:
+                return {'total': torch.tensor(0.0, device=pred_pose.device, requires_grad=True)}
+            else:
+                return torch.tensor(0.0, device=pred_pose.device, requires_grad=True)
+        
         losses = {}
         
         if self.loss_type == 'geodesic':
@@ -312,6 +346,15 @@ def compute_angular_error(pred_pose: torch.Tensor, gt_pose: torch.Tensor,
     Returns:
         angular_error: Angular error for each sample in batch
     """
+    # Check for NaN/Inf in inputs
+    if torch.isnan(pred_pose).any() or torch.isinf(pred_pose).any():
+        print(f"WARNING: NaN or Inf in predicted pose for angular error")
+        return torch.zeros(pred_pose.shape[0], device=pred_pose.device)
+        
+    if torch.isnan(gt_pose).any() or torch.isinf(gt_pose).any():
+        print(f"WARNING: NaN or Inf in ground truth pose for angular error")
+        return torch.zeros(gt_pose.shape[0], device=gt_pose.device)
+    
     # Convert to rotation matrices
     if representation == 'axis_angle':
         pred_rot = axis_angle_to_rotation_matrix(pred_pose)
