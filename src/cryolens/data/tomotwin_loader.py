@@ -177,8 +177,15 @@ class StructureDataWrapper(Dataset):
     
     def __getitem__(self, idx):
         """Get item from dataset with unified molecule index."""
-        # Get the original item
-        volume, _ = self.dataset[idx]
+        # Get the original item - it might have orientation data
+        item = self.dataset[idx]
+        
+        # Check if orientation data is included
+        if len(item) == 3:
+            volume, _, orientation = item
+        else:
+            volume, _ = item
+            orientation = None
         
         # If external molecule order is provided, use it for indexing
         if self.external_molecule_order is not None:
@@ -191,7 +198,11 @@ class StructureDataWrapper(Dataset):
             # Use the local molecule_to_idx mapping for this structure
             molecule_idx = self.molecule_to_idx.get(self.structure_name, -1)
         
-        return volume, torch.tensor(molecule_idx, dtype=torch.long)
+        # Return with orientation if available
+        if orientation is not None:
+            return volume, torch.tensor(molecule_idx, dtype=torch.long), orientation
+        else:
+            return volume, torch.tensor(molecule_idx, dtype=torch.long)
 
 
 class SingleStructureTomoTwinDataset(Dataset):
