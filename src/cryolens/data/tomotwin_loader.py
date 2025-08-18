@@ -910,24 +910,38 @@ class TomoTwinDataset(Dataset):
         Returns
         -------
         tuple
-            (volume, molecule_id, source_type)
+            (volume, molecule_id, source_type) or (volume, molecule_id, pose, source_type) if return_poses is True
         """
         try:
             if self.dataset is None or idx >= self.total_items:
                 default_shape = (1, self.box_size, self.box_size, self.box_size)
-                return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), "unknown"
+                if self.return_poses:
+                    return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), None, "unknown"
+                else:
+                    return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), "unknown"
             
             # Get the sample from the dataset
-            volume, mol_id = self.dataset[idx]
+            sample = self.dataset[idx]
+            
+            # Handle both 2-value and 3-value returns
+            pose = None
+            if len(sample) == 3:
+                volume, mol_id, pose = sample
+            else:
+                volume, mol_id = sample
             
             # Try to determine the source type/structure name from the molecule ID
             source_type = "unknown"
-            for struct_name, idx in self.molecule_to_idx.items():
-                if idx == mol_id.item():
+            for struct_name, struct_idx in self.molecule_to_idx.items():
+                if struct_idx == mol_id.item():
                     source_type = struct_name
                     break
             
-            return volume, mol_id, source_type
+            # Return with or without pose based on what we received
+            if pose is not None:
+                return volume, mol_id, pose, source_type
+            else:
+                return volume, mol_id, source_type
             
         except Exception as e:
             logger.error(f"Error in get_sample_by_index: {str(e)}")
