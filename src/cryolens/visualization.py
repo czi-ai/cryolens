@@ -49,15 +49,16 @@ class VisualizationPlotter:
     def __init__(self, config: VisualizationConfig):
         self.config = config
         
-    def setup_figure(self, n_molecules: int) -> Tuple[plt.Figure, plt.GridSpec]:
+    def setup_figure(self, n_molecules: int, has_pose_comparisons: bool = False) -> Tuple[plt.Figure, plt.GridSpec]:
         """Setup the figure and grid for plotting with minimal whitespace"""
         # Handle edge case of no molecules
         if n_molecules <= 0:
             raise ValueError(f"Cannot create figure with {n_molecules} molecules")
             
         # Calculate dimensions based on content
-        # Each molecule now needs 2 rows per sample (2 rows x max_samples_per_mol)
-        n_rows = n_molecules * self.config.max_samples_per_mol * 2
+        # Each molecule needs 2 or 3 rows per sample depending on pose comparisons
+        rows_per_sample = 3 if has_pose_comparisons else 2
+        n_rows = n_molecules * self.config.max_samples_per_mol * rows_per_sample
         n_cols = 9  # 3 types per row * 3 views
         
         # Calculate figure dimensions maintaining reasonable proportions
