@@ -895,11 +895,22 @@ class VisualizationCallback(Callback):
         print(f"Pose summary saved to: {pose_summary_file}")
         
         # Also print a brief summary to console
-        if total_samples_with_error > 0:
-            avg_error = total_error / total_samples_with_error
+        if all_errors:
+            errors_array = np.array(all_errors)
+            avg_error = np.mean(errors_array)
+            std_error = np.std(errors_array)
+            median_error = np.median(errors_array)
             print(f"\nPose Summary - Epoch {epoch}:")
             print(f"  Average Geodesic Error: {avg_error:.4f} rad ({np.degrees(avg_error):.2f}°)")
-            print(f"  Total Samples: {total_samples_with_error}")
+            print(f"  Std Dev: {std_error:.4f} rad ({np.degrees(std_error):.2f}°)")
+            print(f"  Median: {median_error:.4f} rad ({np.degrees(median_error):.2f}°)")
+            print(f"  Total Samples: {len(all_errors)}")
+            
+            # Show quick distribution
+            errors_deg = np.degrees(errors_array)
+            under_15 = np.sum(errors_deg < 15)
+            under_30 = np.sum(errors_deg < 30)
+            print(f"  Distribution: <15°: {100*under_15/len(errors_deg):.1f}%, <30°: {100*under_30/len(errors_deg):.1f}%")
     
     def _create_source_specific_visualizations(self, all_samples, epoch, viz_dir, pl_module):
         """Create separate visualizations for each source type"""
