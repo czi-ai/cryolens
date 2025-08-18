@@ -679,6 +679,9 @@ class VisualizationCallback(Callback):
         # Only create the standard visualization to save time and disk space
         self._create_standard_visualization(all_samples, trainer.current_epoch, viz_dir, pl_module)
         
+        # Log pose information summary if poses are available
+        self._log_pose_summary(all_samples, trainer.current_epoch, viz_dir)
+        
         # Skip source-specific visualizations to improve performance
         # self._create_source_specific_visualizations(all_samples, trainer.current_epoch, viz_dir, pl_module)
     
