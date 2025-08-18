@@ -192,6 +192,167 @@ class ContrastiveAffinityLoss(nn.Module):
             return zero_tensor.requires_grad_()
 
 
+class GeodesicPoseLoss(nn.Module):
+    """
+    Compute geodesic distance between predicted and true rotations.
+    
+    For axis-angle representation: [angle, ax, ay, az]
+    The loss is the geodesic distance on SO(3) manifold.
+    
+    Parameters
+    ----------
+    pose_channels : int
+        Number of pose channels (1 for single rotation, 4 for axis-angle)
+    reduction : str
+        How to reduce the loss ('mean' or 'sum')
+    """
+    
+    def __init__(self, pose_channels: int = 4, reduction: str = 'mean'):
+        super().__init__()
+        self.pose_channels = pose_channels
+        self.reduction = reduction
+        
+    def axis_angle_to_matrix(self, axis_angle: torch.Tensor) -> torch.Tensor:
+        """
+        Convert axis-angle representation to rotation matrix.
+        
+        Parameters
+        ----------
+        axis_angle : torch.Tensor
+            Shape (B, 4) with [angle, ax, ay, az]
+            
+        Returns
+        -------
+        torch.Tensor
+            Rotation matrices of shape (B, 3, 3)
+        """
+        batch_size = axis_angle.shape[0]
+        angle = axis_angle[:, 0]  # (B,)
+        axis = axis_angle[:, 1:4]  # (B, 3)
+        
+        # Normalize axis to unit vector
+        axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
+        
+        # Rodrigues' rotation formula
+        cos_angle = torch.cos(angle)
+        sin_angle = torch.sin(angle)
+        
+        # Create skew-symmetric matrix K from axis
+        K = torch.zeros((batch_size, 3, 3), device=axis_angle.device, dtype=axis_angle.dtype)
+        K[:, 0, 1] = -axis[:, 2]
+        K[:, 0, 2] = axis[:, 1]
+        K[:, 1, 0] = axis[:, 2]
+        K[:, 1, 2] = -axis[:, 0]
+        K[:, 2, 0] = -axis[:, 1]
+        K[:, 2, 1] = axis[:, 0]
+        
+        # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
+        I = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(batch_size, -1, -1)
+        K_squared = torch.bmm(K, K)
+        
+        R = I + sin_angle.unsqueeze(-1).unsqueeze(-1) * K + \
+            (1 - cos_angle).unsqueeze(-1).unsqueeze(-1) * K_squared
+        
+        return R
+    
+    def forward(self, pred_pose: torch.Tensor, true_pose: torch.Tensor) -> torch.Tensor:
+        """
+        Compute geodesic distance between predicted and true rotations.
+        
+        Parameters
+        ----------
+        pred_pose : torch.Tensor
+            Predicted pose (B, pose_channels)
+        true_pose : torch.Tensor
+            True pose (B, pose_channels)
+            
+        Returns
+        -------
+        torch.Tensor
+            Geodesic loss
+        """
+        if self.pose_channels == 4:
+            # Convert to rotation matrices
+            pred_rot = self.axis_angle_to_matrix(pred_pose)
+            true_rot = self.axis_angle_to_matrix(true_pose)
+            
+            # Compute relative rotation: R_rel = R_true @ R_pred^T
+            R_rel = torch.bmm(true_rot, pred_rot.transpose(-2, -1))
+            
+            # Extract angle from relative rotation
+            # angle = arccos((trace(R_rel) - 1) / 2)
+            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            cos_angle = (trace - 1) / 2
+            
+            # Clamp for numerical stability
+            cos_angle = torch.clamp(cos_angle, -1 + 1e-6, 1 - 1e-6)
+            geodesic_dist = torch.acos(cos_angle)
+            
+        elif self.pose_channels == 1:
+            # For 1D rotation, use simple angular distance
+            # Wrap angles to [-π, π]
+            pred_wrapped = torch.remainder(pred_pose + np.pi, 2 * np.pi) - np.pi
+            true_wrapped = torch.remainder(true_pose + np.pi, 2 * np.pi) - np.pi
+            
+            # Angular distance
+            diff = pred_wrapped - true_wrapped
+            geodesic_dist = torch.abs(torch.remainder(diff + np.pi, 2 * np.pi) - np.pi).squeeze(-1)
+            
+        else:
+            # Fallback to L2 loss for other representations
+            geodesic_dist = torch.norm(pred_pose - true_pose, p=2, dim=-1)
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return geodesic_dist.mean()
+        elif self.reduction == 'sum':
+            return geodesic_dist.sum()
+        else:
+            return geodesic_dist
+
+
+class PoseWarmupScheduler:
+    """
+    Manages transition from supervised to unsupervised pose learning.
+    
+    Parameters
+    ----------
+    warmup_epochs : int
+        Number of epochs for pose warmup
+    cycle_with_curriculum : bool
+        Whether to reset warmup at each curriculum phase
+    epochs_per_phase : int
+        Number of epochs per curriculum phase
+    """
+    
+    def __init__(self, warmup_epochs: int, cycle_with_curriculum: bool = False, 
+                 epochs_per_phase: int = 100):
+        self.warmup_epochs = warmup_epochs
+        self.cycle_with_curriculum = cycle_with_curriculum
+        self.epochs_per_phase = epochs_per_phase
+        
+    def should_use_supervised(self, epoch: int) -> bool:
+        """Determine if supervised pose should be used at this epoch."""
+        if self.cycle_with_curriculum:
+            # Reset warmup at the start of each curriculum phase
+            phase_epoch = epoch % self.epochs_per_phase
+            return phase_epoch < self.warmup_epochs
+        else:
+            # Global warmup only at the beginning
+            return epoch < self.warmup_epochs
+            
+    def get_supervision_weight(self, epoch: int) -> float:
+        """Get weight for supervised loss (can implement smooth transition)."""
+        if self.should_use_supervised(epoch):
+            if self.cycle_with_curriculum:
+                phase_epoch = epoch % self.epochs_per_phase
+                # Linear decay within warmup period
+                return 1.0 - (phase_epoch / self.warmup_epochs) * 0.5
+            else:
+                return 1.0 - (epoch / self.warmup_epochs) * 0.5
+        return 0.0
+
+
 class NormalizedMSELoss(nn.Module):
     """MSE loss normalized by the size of the subvolume.
     
@@ -461,6 +622,167 @@ class AdaptiveContrastiveAffinityLoss(ContrastiveAffinityLoss):
             return zero_tensor.requires_grad_()
 
 
+class GeodesicPoseLoss(nn.Module):
+    """
+    Compute geodesic distance between predicted and true rotations.
+    
+    For axis-angle representation: [angle, ax, ay, az]
+    The loss is the geodesic distance on SO(3) manifold.
+    
+    Parameters
+    ----------
+    pose_channels : int
+        Number of pose channels (1 for single rotation, 4 for axis-angle)
+    reduction : str
+        How to reduce the loss ('mean' or 'sum')
+    """
+    
+    def __init__(self, pose_channels: int = 4, reduction: str = 'mean'):
+        super().__init__()
+        self.pose_channels = pose_channels
+        self.reduction = reduction
+        
+    def axis_angle_to_matrix(self, axis_angle: torch.Tensor) -> torch.Tensor:
+        """
+        Convert axis-angle representation to rotation matrix.
+        
+        Parameters
+        ----------
+        axis_angle : torch.Tensor
+            Shape (B, 4) with [angle, ax, ay, az]
+            
+        Returns
+        -------
+        torch.Tensor
+            Rotation matrices of shape (B, 3, 3)
+        """
+        batch_size = axis_angle.shape[0]
+        angle = axis_angle[:, 0]  # (B,)
+        axis = axis_angle[:, 1:4]  # (B, 3)
+        
+        # Normalize axis to unit vector
+        axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
+        
+        # Rodrigues' rotation formula
+        cos_angle = torch.cos(angle)
+        sin_angle = torch.sin(angle)
+        
+        # Create skew-symmetric matrix K from axis
+        K = torch.zeros((batch_size, 3, 3), device=axis_angle.device, dtype=axis_angle.dtype)
+        K[:, 0, 1] = -axis[:, 2]
+        K[:, 0, 2] = axis[:, 1]
+        K[:, 1, 0] = axis[:, 2]
+        K[:, 1, 2] = -axis[:, 0]
+        K[:, 2, 0] = -axis[:, 1]
+        K[:, 2, 1] = axis[:, 0]
+        
+        # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
+        I = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(batch_size, -1, -1)
+        K_squared = torch.bmm(K, K)
+        
+        R = I + sin_angle.unsqueeze(-1).unsqueeze(-1) * K + \
+            (1 - cos_angle).unsqueeze(-1).unsqueeze(-1) * K_squared
+        
+        return R
+    
+    def forward(self, pred_pose: torch.Tensor, true_pose: torch.Tensor) -> torch.Tensor:
+        """
+        Compute geodesic distance between predicted and true rotations.
+        
+        Parameters
+        ----------
+        pred_pose : torch.Tensor
+            Predicted pose (B, pose_channels)
+        true_pose : torch.Tensor
+            True pose (B, pose_channels)
+            
+        Returns
+        -------
+        torch.Tensor
+            Geodesic loss
+        """
+        if self.pose_channels == 4:
+            # Convert to rotation matrices
+            pred_rot = self.axis_angle_to_matrix(pred_pose)
+            true_rot = self.axis_angle_to_matrix(true_pose)
+            
+            # Compute relative rotation: R_rel = R_true @ R_pred^T
+            R_rel = torch.bmm(true_rot, pred_rot.transpose(-2, -1))
+            
+            # Extract angle from relative rotation
+            # angle = arccos((trace(R_rel) - 1) / 2)
+            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            cos_angle = (trace - 1) / 2
+            
+            # Clamp for numerical stability
+            cos_angle = torch.clamp(cos_angle, -1 + 1e-6, 1 - 1e-6)
+            geodesic_dist = torch.acos(cos_angle)
+            
+        elif self.pose_channels == 1:
+            # For 1D rotation, use simple angular distance
+            # Wrap angles to [-π, π]
+            pred_wrapped = torch.remainder(pred_pose + np.pi, 2 * np.pi) - np.pi
+            true_wrapped = torch.remainder(true_pose + np.pi, 2 * np.pi) - np.pi
+            
+            # Angular distance
+            diff = pred_wrapped - true_wrapped
+            geodesic_dist = torch.abs(torch.remainder(diff + np.pi, 2 * np.pi) - np.pi).squeeze(-1)
+            
+        else:
+            # Fallback to L2 loss for other representations
+            geodesic_dist = torch.norm(pred_pose - true_pose, p=2, dim=-1)
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return geodesic_dist.mean()
+        elif self.reduction == 'sum':
+            return geodesic_dist.sum()
+        else:
+            return geodesic_dist
+
+
+class PoseWarmupScheduler:
+    """
+    Manages transition from supervised to unsupervised pose learning.
+    
+    Parameters
+    ----------
+    warmup_epochs : int
+        Number of epochs for pose warmup
+    cycle_with_curriculum : bool
+        Whether to reset warmup at each curriculum phase
+    epochs_per_phase : int
+        Number of epochs per curriculum phase
+    """
+    
+    def __init__(self, warmup_epochs: int, cycle_with_curriculum: bool = False, 
+                 epochs_per_phase: int = 100):
+        self.warmup_epochs = warmup_epochs
+        self.cycle_with_curriculum = cycle_with_curriculum
+        self.epochs_per_phase = epochs_per_phase
+        
+    def should_use_supervised(self, epoch: int) -> bool:
+        """Determine if supervised pose should be used at this epoch."""
+        if self.cycle_with_curriculum:
+            # Reset warmup at the start of each curriculum phase
+            phase_epoch = epoch % self.epochs_per_phase
+            return phase_epoch < self.warmup_epochs
+        else:
+            # Global warmup only at the beginning
+            return epoch < self.warmup_epochs
+            
+    def get_supervision_weight(self, epoch: int) -> float:
+        """Get weight for supervised loss (can implement smooth transition)."""
+        if self.should_use_supervised(epoch):
+            if self.cycle_with_curriculum:
+                phase_epoch = epoch % self.epochs_per_phase
+                # Linear decay within warmup period
+                return 1.0 - (phase_epoch / self.warmup_epochs) * 0.5
+            else:
+                return 1.0 - (epoch / self.warmup_epochs) * 0.5
+        return 0.0
+
+
 class AffinityCosineLoss(nn.Module):
     """Affinity loss based on cosine similarity that handles background samples.
     
@@ -607,3 +929,164 @@ class AffinityCosineLoss(nn.Module):
             # Return gradient-maintaining zero tensor
             zero_tensor = torch.tensor(0.0, device=self.device)
             return zero_tensor.requires_grad_()
+
+
+class GeodesicPoseLoss(nn.Module):
+    """
+    Compute geodesic distance between predicted and true rotations.
+    
+    For axis-angle representation: [angle, ax, ay, az]
+    The loss is the geodesic distance on SO(3) manifold.
+    
+    Parameters
+    ----------
+    pose_channels : int
+        Number of pose channels (1 for single rotation, 4 for axis-angle)
+    reduction : str
+        How to reduce the loss ('mean' or 'sum')
+    """
+    
+    def __init__(self, pose_channels: int = 4, reduction: str = 'mean'):
+        super().__init__()
+        self.pose_channels = pose_channels
+        self.reduction = reduction
+        
+    def axis_angle_to_matrix(self, axis_angle: torch.Tensor) -> torch.Tensor:
+        """
+        Convert axis-angle representation to rotation matrix.
+        
+        Parameters
+        ----------
+        axis_angle : torch.Tensor
+            Shape (B, 4) with [angle, ax, ay, az]
+            
+        Returns
+        -------
+        torch.Tensor
+            Rotation matrices of shape (B, 3, 3)
+        """
+        batch_size = axis_angle.shape[0]
+        angle = axis_angle[:, 0]  # (B,)
+        axis = axis_angle[:, 1:4]  # (B, 3)
+        
+        # Normalize axis to unit vector
+        axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
+        
+        # Rodrigues' rotation formula
+        cos_angle = torch.cos(angle)
+        sin_angle = torch.sin(angle)
+        
+        # Create skew-symmetric matrix K from axis
+        K = torch.zeros((batch_size, 3, 3), device=axis_angle.device, dtype=axis_angle.dtype)
+        K[:, 0, 1] = -axis[:, 2]
+        K[:, 0, 2] = axis[:, 1]
+        K[:, 1, 0] = axis[:, 2]
+        K[:, 1, 2] = -axis[:, 0]
+        K[:, 2, 0] = -axis[:, 1]
+        K[:, 2, 1] = axis[:, 0]
+        
+        # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
+        I = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(batch_size, -1, -1)
+        K_squared = torch.bmm(K, K)
+        
+        R = I + sin_angle.unsqueeze(-1).unsqueeze(-1) * K + \
+            (1 - cos_angle).unsqueeze(-1).unsqueeze(-1) * K_squared
+        
+        return R
+    
+    def forward(self, pred_pose: torch.Tensor, true_pose: torch.Tensor) -> torch.Tensor:
+        """
+        Compute geodesic distance between predicted and true rotations.
+        
+        Parameters
+        ----------
+        pred_pose : torch.Tensor
+            Predicted pose (B, pose_channels)
+        true_pose : torch.Tensor
+            True pose (B, pose_channels)
+            
+        Returns
+        -------
+        torch.Tensor
+            Geodesic loss
+        """
+        if self.pose_channels == 4:
+            # Convert to rotation matrices
+            pred_rot = self.axis_angle_to_matrix(pred_pose)
+            true_rot = self.axis_angle_to_matrix(true_pose)
+            
+            # Compute relative rotation: R_rel = R_true @ R_pred^T
+            R_rel = torch.bmm(true_rot, pred_rot.transpose(-2, -1))
+            
+            # Extract angle from relative rotation
+            # angle = arccos((trace(R_rel) - 1) / 2)
+            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            cos_angle = (trace - 1) / 2
+            
+            # Clamp for numerical stability
+            cos_angle = torch.clamp(cos_angle, -1 + 1e-6, 1 - 1e-6)
+            geodesic_dist = torch.acos(cos_angle)
+            
+        elif self.pose_channels == 1:
+            # For 1D rotation, use simple angular distance
+            # Wrap angles to [-π, π]
+            pred_wrapped = torch.remainder(pred_pose + np.pi, 2 * np.pi) - np.pi
+            true_wrapped = torch.remainder(true_pose + np.pi, 2 * np.pi) - np.pi
+            
+            # Angular distance
+            diff = pred_wrapped - true_wrapped
+            geodesic_dist = torch.abs(torch.remainder(diff + np.pi, 2 * np.pi) - np.pi).squeeze(-1)
+            
+        else:
+            # Fallback to L2 loss for other representations
+            geodesic_dist = torch.norm(pred_pose - true_pose, p=2, dim=-1)
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return geodesic_dist.mean()
+        elif self.reduction == 'sum':
+            return geodesic_dist.sum()
+        else:
+            return geodesic_dist
+
+
+class PoseWarmupScheduler:
+    """
+    Manages transition from supervised to unsupervised pose learning.
+    
+    Parameters
+    ----------
+    warmup_epochs : int
+        Number of epochs for pose warmup
+    cycle_with_curriculum : bool
+        Whether to reset warmup at each curriculum phase
+    epochs_per_phase : int
+        Number of epochs per curriculum phase
+    """
+    
+    def __init__(self, warmup_epochs: int, cycle_with_curriculum: bool = False, 
+                 epochs_per_phase: int = 100):
+        self.warmup_epochs = warmup_epochs
+        self.cycle_with_curriculum = cycle_with_curriculum
+        self.epochs_per_phase = epochs_per_phase
+        
+    def should_use_supervised(self, epoch: int) -> bool:
+        """Determine if supervised pose should be used at this epoch."""
+        if self.cycle_with_curriculum:
+            # Reset warmup at the start of each curriculum phase
+            phase_epoch = epoch % self.epochs_per_phase
+            return phase_epoch < self.warmup_epochs
+        else:
+            # Global warmup only at the beginning
+            return epoch < self.warmup_epochs
+            
+    def get_supervision_weight(self, epoch: int) -> float:
+        """Get weight for supervised loss (can implement smooth transition)."""
+        if self.should_use_supervised(epoch):
+            if self.cycle_with_curriculum:
+                phase_epoch = epoch % self.epochs_per_phase
+                # Linear decay within warmup period
+                return 1.0 - (phase_epoch / self.warmup_epochs) * 0.5
+            else:
+                return 1.0 - (epoch / self.warmup_epochs) * 0.5
+        return 0.0

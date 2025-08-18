@@ -220,7 +220,7 @@ class CachedParquetDataset(Dataset):
         Returns
         -------
         tuple
-            (volume, molecule_id)
+            (volume, molecule_id) or (volume, molecule_id, pose) if return_poses=True
         """
         try:
             # Track first few items for debugging
@@ -279,6 +279,19 @@ class CachedParquetDataset(Dataset):
                 # Regular case - convert name to PDB ID then to index
                 pdb_id = self.name_to_pdb.get(name)
                 molecule_idx = self.molecule_to_idx.get(pdb_id, -1)
+            
+            # Handle pose if available and requested
+            if hasattr(self, 'return_poses') and self.return_poses and hasattr(self, 'pose_column'):
+                pose_data = snr_data.get(self.pose_column, None)
+                if pose_data is not None:
+                    if isinstance(pose_data, bytes):
+                        pose = np.frombuffer(pose_data, dtype=np.float32)
+                    else:
+                        pose = np.array(pose_data, dtype=np.float32)
+                    
+                    # Convert to tensor
+                    pose = torch.from_numpy(pose).to(dtype=torch.float32)
+                    return subvolume, torch.tensor(molecule_idx, dtype=torch.long), pose
             
             return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
                 

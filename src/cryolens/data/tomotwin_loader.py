@@ -55,6 +55,8 @@ class TomoTwinParquetDataset(CachedParquetDataset):
         Total number of processes in distributed setup
     structure_name : str, optional
         Name of the structure for this dataset (for logging)
+    return_poses : bool, optional
+        Whether to return pose information (default: False)
     """
     
     def __init__(
@@ -67,9 +69,11 @@ class TomoTwinParquetDataset(CachedParquetDataset):
         seed=171717,
         rank=None,
         world_size=None,
-        structure_name=None
+        structure_name=None,
+        return_poses=False
     ):
         self.structure_name = structure_name
+        self.return_poses = return_poses
         super().__init__(
             parquet_path=parquet_path,
             name_to_pdb=name_to_pdb,
@@ -134,6 +138,17 @@ class TomoTwinParquetDataset(CachedParquetDataset):
                 print(f"{rank_str}: DEADLOCK_DEBUG - No valid data found after filtering")
                 raise ValueError("No valid data found after filtering")
                 
+            # Check for pose columns if return_poses is enabled
+            if self.return_poses:
+                pose_columns = ['orientation_quaternion', 'orientation_axis_angle']
+                available_pose_cols = [col for col in pose_columns if col in self.df.columns]
+                if available_pose_cols:
+                    self.pose_column = available_pose_cols[0]  # Use first available
+                    print(f"{rank_str}: Pose column '{self.pose_column}' found for pose supervision")
+                else:
+                    print(f"{rank_str}: WARNING - No pose columns found, poses will not be returned")
+                    self.return_poses = False
+            
             print(f"{rank_str}: DEADLOCK_DEBUG - _load_data completed successfully with {len(self.df)} samples")
                 
         except Exception as e:
@@ -164,13 +179,16 @@ class StructureDataWrapper(Dataset):
         Global mapping from molecule names to indices
     external_molecule_order : list, optional
         External ordering of molecules to use for consistent indexing
+    return_poses : bool, optional
+        Whether to return pose information
     """
     
-    def __init__(self, dataset, structure_name, molecule_to_idx, external_molecule_order=None):
+    def __init__(self, dataset, structure_name, molecule_to_idx, external_molecule_order=None, return_poses=False):
         self.dataset = dataset
         self.structure_name = structure_name
         self.molecule_to_idx = molecule_to_idx
         self.external_molecule_order = external_molecule_order
+        self.return_poses = return_poses and hasattr(dataset, 'return_poses') and dataset.return_poses
     
     def __len__(self):
         return len(self.dataset)
@@ -178,7 +196,13 @@ class StructureDataWrapper(Dataset):
     def __getitem__(self, idx):
         """Get item from dataset with unified molecule index."""
         # Get the original item
-        volume, _ = self.dataset[idx]
+        item = self.dataset[idx]
+        
+        if self.return_poses and len(item) == 3:
+            volume, _, pose = item
+        else:
+            volume = item[0] if isinstance(item, tuple) else item
+            pose = None
         
         # If external molecule order is provided, use it for indexing
         if self.external_molecule_order is not None:
@@ -191,7 +215,10 @@ class StructureDataWrapper(Dataset):
             # Use the local molecule_to_idx mapping for this structure
             molecule_idx = self.molecule_to_idx.get(self.structure_name, -1)
         
-        return volume, torch.tensor(molecule_idx, dtype=torch.long)
+        if self.return_poses and pose is not None:
+            return volume, torch.tensor(molecule_idx, dtype=torch.long), pose
+        else:
+            return volume, torch.tensor(molecule_idx, dtype=torch.long)
 
 
 class SingleStructureTomoTwinDataset(Dataset):
@@ -234,7 +261,8 @@ class SingleStructureTomoTwinDataset(Dataset):
         augment=True,
         seed=171717,
         rank=None,
-        world_size=None
+        world_size=None,
+        return_poses=False
     ):
         self.structure_dir = structure_dir
         self.structure_name = structure_name
@@ -246,6 +274,7 @@ class SingleStructureTomoTwinDataset(Dataset):
         self.seed = seed
         self.rank = rank
         self.world_size = world_size
+        self.return_poses = return_poses
         
         # Set random seed
         if self.seed is not None:
@@ -307,7 +336,8 @@ class SingleStructureTomoTwinDataset(Dataset):
                 seed=self.seed,
                 rank=self.rank,
                 world_size=self.world_size,
-                structure_name=self.structure_name
+                structure_name=self.structure_name,
+                return_poses=self.return_poses
             )
             
             if len(dataset) == 0:
@@ -423,7 +453,8 @@ class TomoTwinDataset(Dataset):
         external_molecule_order=None,
         enable_background=False,
         background_ratio=0.2,
-        background_params=None
+        background_params=None,
+        return_poses=False
     ):
         self.base_dir = Path(base_dir)
         self.name_to_pdb = name_to_pdb or {}
@@ -434,6 +465,7 @@ class TomoTwinDataset(Dataset):
         self.seed = seed
         self.rank = rank
         self.world_size = world_size
+        self.return_poses = return_poses
         self.samples_per_epoch = samples_per_epoch
         self.normalization = normalization
         self.max_structures = max_structures
@@ -442,6 +474,7 @@ class TomoTwinDataset(Dataset):
         self.enable_background = enable_background
         self.background_ratio = background_ratio
         self.background_params = background_params or {}
+        self.return_poses = return_poses
         
         # Initialize background generator if enabled
         self.background_generator = None
@@ -613,7 +646,8 @@ class TomoTwinDataset(Dataset):
                 augment=self.augment,
                 seed=self.seed,
                 rank=self.rank,
-                world_size=self.world_size
+                world_size=self.world_size,
+                return_poses=self.return_poses
             )
             
             if dataset is not None and len(dataset) > 0:
@@ -646,7 +680,8 @@ class TomoTwinDataset(Dataset):
         wrapped_datasets = []
         for i, dataset in enumerate(structure_datasets):
             struct_name = valid_structure_names[i]
-            wrapped = StructureDataWrapper(dataset, struct_name, self.molecule_to_idx, self.external_molecule_order)
+            wrapped = StructureDataWrapper(dataset, struct_name, self.molecule_to_idx, 
+                                         self.external_molecule_order, return_poses=self.return_poses)
             wrapped_datasets.append(wrapped)
             
         # Combine datasets using ConcatDataset or create an empty dataset
@@ -912,7 +947,8 @@ def create_tomotwin_dataloader(
     external_molecule_order=None,
     enable_background=False,
     background_ratio=0.2,
-    background_params=None
+    background_params=None,
+    return_poses=False
 ):
     """Create a DataLoader for TomoTwin data.
     
@@ -942,6 +978,8 @@ def create_tomotwin_dataloader(
         Ratio of background samples to include
     background_params : dict or None
         Parameters for background generator
+    return_poses : bool
+        Whether to return pose information from parquet files
         
     Returns
     -------
@@ -969,7 +1007,8 @@ def create_tomotwin_dataloader(
         external_molecule_order=external_molecule_order,
         enable_background=enable_background,
         background_ratio=background_ratio,
-        background_params=background_params
+        background_params=background_params,
+        return_poses=return_poses
     )
     
     # Print molecular stats
