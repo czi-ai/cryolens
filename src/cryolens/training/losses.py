@@ -304,7 +304,7 @@ class GeodesicPoseLoss(nn.Module):
             cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
             
             # Check if clamping was needed (indicates potential numerical issues)
-            if (cos_angle < -0.999 or cos_angle > 0.999).any():
+            if ((cos_angle < -0.999) | (cos_angle > 0.999)).any():
                 print(f"WARNING: Cos angle near boundary: min={cos_angle.min()}, max={cos_angle.max()}")
             
             geodesic_dist = torch.acos(cos_angle)
@@ -762,7 +762,7 @@ class GeodesicPoseLoss(nn.Module):
             cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
             
             # Check if clamping was needed (indicates potential numerical issues)
-            if (cos_angle < -0.999 or cos_angle > 0.999).any():
+            if ((cos_angle < -0.999) | (cos_angle > 0.999)).any():
                 print(f"WARNING: Cos angle near boundary: min={cos_angle.min()}, max={cos_angle.max()}")
             
             geodesic_dist = torch.acos(cos_angle)
@@ -1099,7 +1099,7 @@ class GeodesicPoseLoss(nn.Module):
             cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
             
             # Check if clamping was needed (indicates potential numerical issues)
-            if (cos_angle < -0.999 or cos_angle > 0.999).any():
+            if ((cos_angle < -0.999) | (cos_angle > 0.999)).any():
                 print(f"WARNING: Cos angle near boundary: min={cos_angle.min()}, max={cos_angle.max()}")
             
             geodesic_dist = torch.acos(cos_angle)
