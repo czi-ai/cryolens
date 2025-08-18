@@ -347,6 +347,32 @@ class VisualizationCallback(Callback):
                         pose = torch.zeros((batch_size, 4), device=z.device)
                         pose[:, 3] = 1.0  # z-axis
                     
+                    # If we have ground truth pose, also generate output with GT pose for comparison
+                    output_with_gt_pose = None
+                    raw_splats_with_gt_pose = None
+                    if pose_data is not None and hasattr(pl_module.model.decoder, 'forward'):
+                        try:
+                            with torch.no_grad():
+                                # Ensure pose_data has correct shape and device
+                                gt_pose = pose_data.unsqueeze(0) if pose_data.dim() == 1 else pose_data
+                                gt_pose = gt_pose.to(z.device)
+                                
+                                # Generate output with ground truth pose
+                                output_with_gt_pose = pl_module.model.decoder.forward(
+                                    z, gt_pose, global_weight=global_weight, use_final_convolution=True
+                                )
+                                
+                                # Get raw splats with GT pose
+                                splats_gt, weights_gt, sigmas_gt = pl_module.model.decoder.decode_splats(z, gt_pose)
+                                raw_splats_with_gt_pose = pl_module.model.decoder._splatter(
+                                    splats_gt, weights_gt, sigmas_gt,
+                                    splat_sigma_range=pl_module.model.decoder._splat_sigma_range
+                                )
+                        except Exception as e:
+                            print(f"Error generating output with GT pose: {e}")
+                            output_with_gt_pose = None
+                            raw_splats_with_gt_pose = None
+                    
                     # Get raw gaussian splats (combined splats with no convolution)
                     try:
                         splats, weights, sigmas = pl_module.model.decoder.decode_splats(z, pose)
