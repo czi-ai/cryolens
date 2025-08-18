@@ -271,10 +271,26 @@ class GeodesicPoseLoss(nn.Module):
         torch.Tensor
             Geodesic loss
         """
+        # Ensure tensors are on same device and dtype
+        if pred_pose.device != true_pose.device:
+            true_pose = true_pose.to(pred_pose.device)
+        if pred_pose.dtype != true_pose.dtype:
+            true_pose = true_pose.to(pred_pose.dtype)
+            
         if self.pose_channels == 4:
+            # Check for NaN or invalid values in input
+            if torch.isnan(pred_pose).any() or torch.isnan(true_pose).any():
+                print(f"WARNING: NaN in pose inputs to GeodesicPoseLoss")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
+            
             # Convert to rotation matrices
             pred_rot = self.axis_angle_to_matrix(pred_pose)
             true_rot = self.axis_angle_to_matrix(true_pose)
+            
+            # Check for NaN in rotation matrices
+            if torch.isnan(pred_rot).any() or torch.isnan(true_rot).any():
+                print(f"WARNING: NaN in rotation matrices")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
             
             # Compute relative rotation: R_rel = R_true @ R_pred^T
             R_rel = torch.bmm(true_rot, pred_rot.transpose(-2, -1))
@@ -284,9 +300,21 @@ class GeodesicPoseLoss(nn.Module):
             trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
             cos_angle = (trace - 1) / 2
             
-            # Clamp for numerical stability
-            cos_angle = torch.clamp(cos_angle, -1 + 1e-6, 1 - 1e-6)
+            # Clamp for numerical stability - use wider bounds
+            cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            
+            # Check if clamping was needed (indicates potential numerical issues)
+            if (cos_angle < -0.999 or cos_angle > 0.999).any():
+                print(f"WARNING: Cos angle near boundary: min={cos_angle.min()}, max={cos_angle.max()}")
+            
             geodesic_dist = torch.acos(cos_angle)
+            
+            # Final NaN check
+            if torch.isnan(geodesic_dist).any():
+                print(f"WARNING: NaN in geodesic distance computation")
+                print(f"  trace: {trace}")
+                print(f"  cos_angle: {cos_angle}")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
             
         elif self.pose_channels == 1:
             # For 1D rotation, use simple angular distance
@@ -701,10 +729,26 @@ class GeodesicPoseLoss(nn.Module):
         torch.Tensor
             Geodesic loss
         """
+        # Ensure tensors are on same device and dtype
+        if pred_pose.device != true_pose.device:
+            true_pose = true_pose.to(pred_pose.device)
+        if pred_pose.dtype != true_pose.dtype:
+            true_pose = true_pose.to(pred_pose.dtype)
+            
         if self.pose_channels == 4:
+            # Check for NaN or invalid values in input
+            if torch.isnan(pred_pose).any() or torch.isnan(true_pose).any():
+                print(f"WARNING: NaN in pose inputs to GeodesicPoseLoss")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
+            
             # Convert to rotation matrices
             pred_rot = self.axis_angle_to_matrix(pred_pose)
             true_rot = self.axis_angle_to_matrix(true_pose)
+            
+            # Check for NaN in rotation matrices
+            if torch.isnan(pred_rot).any() or torch.isnan(true_rot).any():
+                print(f"WARNING: NaN in rotation matrices")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
             
             # Compute relative rotation: R_rel = R_true @ R_pred^T
             R_rel = torch.bmm(true_rot, pred_rot.transpose(-2, -1))
@@ -714,9 +758,21 @@ class GeodesicPoseLoss(nn.Module):
             trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
             cos_angle = (trace - 1) / 2
             
-            # Clamp for numerical stability
-            cos_angle = torch.clamp(cos_angle, -1 + 1e-6, 1 - 1e-6)
+            # Clamp for numerical stability - use wider bounds
+            cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            
+            # Check if clamping was needed (indicates potential numerical issues)
+            if (cos_angle < -0.999 or cos_angle > 0.999).any():
+                print(f"WARNING: Cos angle near boundary: min={cos_angle.min()}, max={cos_angle.max()}")
+            
             geodesic_dist = torch.acos(cos_angle)
+            
+            # Final NaN check
+            if torch.isnan(geodesic_dist).any():
+                print(f"WARNING: NaN in geodesic distance computation")
+                print(f"  trace: {trace}")
+                print(f"  cos_angle: {cos_angle}")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
             
         elif self.pose_channels == 1:
             # For 1D rotation, use simple angular distance
@@ -1010,10 +1066,26 @@ class GeodesicPoseLoss(nn.Module):
         torch.Tensor
             Geodesic loss
         """
+        # Ensure tensors are on same device and dtype
+        if pred_pose.device != true_pose.device:
+            true_pose = true_pose.to(pred_pose.device)
+        if pred_pose.dtype != true_pose.dtype:
+            true_pose = true_pose.to(pred_pose.dtype)
+            
         if self.pose_channels == 4:
+            # Check for NaN or invalid values in input
+            if torch.isnan(pred_pose).any() or torch.isnan(true_pose).any():
+                print(f"WARNING: NaN in pose inputs to GeodesicPoseLoss")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
+            
             # Convert to rotation matrices
             pred_rot = self.axis_angle_to_matrix(pred_pose)
             true_rot = self.axis_angle_to_matrix(true_pose)
+            
+            # Check for NaN in rotation matrices
+            if torch.isnan(pred_rot).any() or torch.isnan(true_rot).any():
+                print(f"WARNING: NaN in rotation matrices")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
             
             # Compute relative rotation: R_rel = R_true @ R_pred^T
             R_rel = torch.bmm(true_rot, pred_rot.transpose(-2, -1))
@@ -1023,9 +1095,21 @@ class GeodesicPoseLoss(nn.Module):
             trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
             cos_angle = (trace - 1) / 2
             
-            # Clamp for numerical stability
-            cos_angle = torch.clamp(cos_angle, -1 + 1e-6, 1 - 1e-6)
+            # Clamp for numerical stability - use wider bounds
+            cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            
+            # Check if clamping was needed (indicates potential numerical issues)
+            if (cos_angle < -0.999 or cos_angle > 0.999).any():
+                print(f"WARNING: Cos angle near boundary: min={cos_angle.min()}, max={cos_angle.max()}")
+            
             geodesic_dist = torch.acos(cos_angle)
+            
+            # Final NaN check
+            if torch.isnan(geodesic_dist).any():
+                print(f"WARNING: NaN in geodesic distance computation")
+                print(f"  trace: {trace}")
+                print(f"  cos_angle: {cos_angle}")
+                return torch.tensor(0.0, device=pred_pose.device, dtype=pred_pose.dtype)
             
         elif self.pose_channels == 1:
             # For 1D rotation, use simple angular distance
