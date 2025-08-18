@@ -855,7 +855,15 @@ class TomoTwinDataset(Dataset):
                     # Get a random index
                     try:
                         rand_idx = random.randrange(self.total_items)
-                        volume, mol_id = self.dataset[rand_idx]
+                        sample_data = self.dataset[rand_idx]
+                        
+                        # Handle both 2-value and 3-value returns
+                        if len(sample_data) == 3:
+                            volume, mol_id, orientation = sample_data
+                        elif len(sample_data) == 2:
+                            volume, mol_id = sample_data
+                        else:
+                            continue
                         
                         # Check if this is the structure we want
                         if mol_id.item() == idx and rand_idx not in indices:
@@ -894,12 +902,23 @@ class TomoTwinDataset(Dataset):
                 return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), "unknown"
             
             # Get the sample from the dataset
-            volume, mol_id = self.dataset[idx]
+            sample_data = self.dataset[idx]
+            
+            # Handle both 2-value and 3-value returns (with or without orientation)
+            if len(sample_data) == 3:
+                volume, mol_id, orientation = sample_data
+                # Note: we don't return orientation here, just volume and mol_id
+            elif len(sample_data) == 2:
+                volume, mol_id = sample_data
+            else:
+                logger.error(f"Unexpected return from dataset[{idx}]: {len(sample_data)} values")
+                default_shape = (1, self.box_size, self.box_size, self.box_size)
+                return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long), "unknown"
             
             # Try to determine the source type/structure name from the molecule ID
             source_type = "unknown"
-            for struct_name, idx in self.molecule_to_idx.items():
-                if idx == mol_id.item():
+            for struct_name, struct_idx in self.molecule_to_idx.items():
+                if struct_idx == mol_id.item():
                     source_type = struct_name
                     break
             

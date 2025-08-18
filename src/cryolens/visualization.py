@@ -186,8 +186,8 @@ class VisualizationCallback(Callback):
         all_samples = defaultdict(list)
         
         # Check if dataset has visualization samples support
-        if not hasattr(dataset, 'get_visualization_samples'):
-            logger.warning("Dataset does not support get_visualization_samples, skipping visualization")
+        if not hasattr(dataset, 'get_visualization_samples') or not hasattr(dataset, 'get_sample_by_index'):
+            logger.warning("Dataset does not support visualization methods, skipping visualization")
             return all_samples
         
         # Get memoized visualization samples
@@ -233,33 +233,8 @@ class VisualizationCallback(Callback):
                     
                 # Process samples for this molecule and source
                 for idx in indices:
-                try:
                     # Get sample directly using the memoized index
-                    if hasattr(dataset, 'get_sample_by_index'):
-                        sample_data_tuple = dataset.get_sample_by_index(idx)
-                        
-                        # Handle both 2-value and 3-value returns
-                        if len(sample_data_tuple) == 3:
-                            subvolume, mol_id, source_info = sample_data_tuple
-                        else:
-                            subvolume, mol_id = sample_data_tuple
-                            source_info = 'unknown'
-                    else:
-                        # Fallback for datasets without get_sample_by_index
-                        # Just use regular indexing
-                        sample_data_tuple = dataset[idx]
-                        if len(sample_data_tuple) == 3:
-                            subvolume, mol_id, orientation = sample_data_tuple
-                            source_info = 'unknown'
-                        elif len(sample_data_tuple) == 2:
-                            subvolume, mol_id = sample_data_tuple
-                            source_info = 'unknown'
-                        else:
-                            logger.warning(f"Unexpected return from dataset[{idx}]: {len(sample_data_tuple)} values")
-                            continue
-                except Exception as e:
-                    logger.warning(f"Error collecting visualization sample: {str(e)}")
-                    continue
+                    subvolume, mol_id, source_type = dataset.get_sample_by_index(idx)
                     
                     # Skip if molecule ID is invalid
                     if mol_id == -1:
