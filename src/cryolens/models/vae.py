@@ -251,17 +251,17 @@ class AffinityVAE(nn.Module):
             # Initialize pose networks with small values to start near identity rotation
             with torch.no_grad():
                 # Initialize mean close to zero (identity rotation)
-                nn.init.normal_(self.pose_mu.weight, mean=0.0, std=0.01)
+                nn.init.xavier_uniform_(self.pose_mu.weight, gain=0.01)
                 nn.init.zeros_(self.pose_mu.bias)
                 
                 # Initialize log_var to small negative values (low initial variance)
-                nn.init.constant_(self.pose_log_var.weight, 0.0)
+                nn.init.xavier_uniform_(self.pose_log_var.weight, gain=0.01)
                 nn.init.constant_(self.pose_log_var.bias, -3.0)  # exp(-3) ≈ 0.05 initial std
         else:
             self.pose = nn.Linear(flat_shape, pose_channels)
             # Initialize deterministic pose close to zero as well
             with torch.no_grad():
-                nn.init.normal_(self.pose.weight, mean=0.0, std=0.01)
+                nn.init.xavier_uniform_(self.pose.weight, gain=0.01)
                 nn.init.zeros_(self.pose.bias)
             
         self.global_weight = nn.Linear(flat_shape, 1)
@@ -460,11 +460,21 @@ class AffinityVAE(nn.Module):
         if self.training:
             # Sample from Gaussian
             std = torch.exp(0.5 * pose_log_var)
+            # Clamp std to prevent extreme values
+            std = torch.clamp(std, min=0.001, max=2.0)
             eps = torch.randn_like(std)
             pose = pose_mu + eps * std
         else:
             # Use mean at test time
             pose = pose_mu
+        
+        # Clamp final pose values
+        pose = torch.clamp(pose, min=-10.0, max=10.0)
+        
+        # Check for NaN and replace with zeros if found
+        if torch.isnan(pose).any():
+            print(f"WARNING: NaN detected in pose, replacing with zeros")
+            pose = torch.where(torch.isnan(pose), torch.zeros_like(pose), pose)
         
         if self.pose_channels == 4:
             # Interpret as axis-angle directly [angle, ax, ay, az]
@@ -568,6 +578,11 @@ class AffinityVAE(nn.Module):
         if self.use_variational_pose:
             pose_mu = self.pose_mu(encoded)
             pose_log_var = self.pose_log_var(encoded)
+            
+            # Clamp values to prevent overflow in float16
+            pose_mu = torch.clamp(pose_mu, min=-10.0, max=10.0)
+            pose_log_var = torch.clamp(pose_log_var, min=-10.0, max=2.0)  # Limit max variance
+            
             # Sample pose
             pose = self.reparameterize_pose(pose_mu, pose_log_var)
             # Store for KL computation
@@ -595,6 +610,8 @@ class AffinityVAE(nn.Module):
                                 print(f"  axis norm mean: {axis_norm.mean().item():.4f}, std: {axis_norm.std().item():.4f}")
         else:
             pose = self.pose(encoded)
+            # Clamp to prevent overflow in float16
+            pose = torch.clamp(pose, min=-10.0, max=10.0)
             
         global_weight = self.global_weight(encoded)
         
