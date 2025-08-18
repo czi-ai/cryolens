@@ -85,8 +85,12 @@ class VisualizationPlotter:
     def plot_molecule(self, fig: plt.Figure, gs: plt.GridSpec, 
                      mol_data: List, mol_idx: int, mol_id: int) -> None:
         """Plot visualizations for a single molecule with source type and pose information"""
-        # Each molecule's samples now take 2 rows per sample
-        base_row = mol_idx * self.config.max_samples_per_mol * 2
+        # Check if any samples have pose comparisons
+        has_pose_comparisons = any('output_gt_pose' in sample for sample in mol_data)
+        
+        # Each molecule's samples now take 2 or 3 rows per sample depending on pose comparisons
+        rows_per_sample = 3 if has_pose_comparisons else 2
+        base_row = mol_idx * self.config.max_samples_per_mol * rows_per_sample
         
         # Group samples by source type for better organization
         samples_by_source = defaultdict(list)
