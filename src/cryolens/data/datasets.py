@@ -220,7 +220,7 @@ class CachedParquetDataset(Dataset):
         Returns
         -------
         tuple
-            (volume, molecule_id)
+            (volume, molecule_id) or (volume, molecule_id, orientation) if orientation data exists
         """
         try:
             # Track first few items for debugging
@@ -280,7 +280,30 @@ class CachedParquetDataset(Dataset):
                 pdb_id = self.name_to_pdb.get(name)
                 molecule_idx = self.molecule_to_idx.get(pdb_id, -1)
             
-            return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
+            # Check if orientation data is available
+            orientation = None
+            if 'orientation_axis_angle' in snr_data and snr_data['orientation_axis_angle'] is not None:
+                try:
+                    orientation_bytes = snr_data['orientation_axis_angle']
+                    if isinstance(orientation_bytes, bytes):
+                        # Convert from bytes to numpy array
+                        orientation_np = np.frombuffer(orientation_bytes, dtype=np.float64)
+                        # Ensure it's 4 values: [angle, ax, ay, az]
+                        if len(orientation_np) == 4:
+                            orientation = torch.from_numpy(orientation_np).float()
+                        else:
+                            if track_item:
+                                print(f"Item {idx}: orientation has wrong shape: {len(orientation_np)}")
+                except Exception as e:
+                    if track_item:
+                        print(f"Item {idx}: failed to load orientation: {str(e)}")
+                    pass
+            
+            # Return with orientation if available
+            if orientation is not None:
+                return subvolume, torch.tensor(molecule_idx, dtype=torch.long), orientation
+            else:
+                return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
                 
         except Exception as e:
             print(f"Error loading item {idx}: {str(e)}")
