@@ -111,22 +111,32 @@ class VisualizationPlotter:
         
         # Plot up to max_samples_per_mol samples
         for sample_idx, sample in enumerate(sorted_samples[:self.config.max_samples_per_mol]):
-            # Calculate the base row for this sample (2 rows per sample)
-            sample_base_row = base_row + sample_idx * 2
+            # Calculate the base row for this sample
+            sample_base_row = base_row + sample_idx * rows_per_sample
             
-            # First row: Input, Combined Splats, Background Splats
+            # First row: Input, Combined Splats (Pred Pose), Background Splats
             row1_volumes = {
                 'Input': sample['input'][0],
-                'Combined Splats': sample['raw_splats'][0],
-                'Background Splats': sample.get('segment_free', np.zeros_like(sample['raw_splats']))[0]
+                'Splats (Pred)': sample['raw_splats'][0],
+                'Background': sample.get('segment_free', np.zeros_like(sample['raw_splats']))[0]
             }
             
-            # Second row: Affinity Splats, Combined+Conv, Affinity+Conv
+            # Second row: Affinity Splats, Output (Pred Pose), Affinity Output
             row2_volumes = {
-                'Affinity Splats': sample.get('segment_affinity', np.zeros_like(sample['raw_splats']))[0],
-                'Combined Output': sample['output'][0],
-                'Affinity Output': sample.get('segment_affinity_conv', np.zeros_like(sample['output']))[0]
+                'Affinity': sample.get('segment_affinity', np.zeros_like(sample['raw_splats']))[0],
+                'Output (Pred)': sample['output'][0],
+                'Affinity Conv': sample.get('segment_affinity_conv', np.zeros_like(sample['output']))[0]
             }
+            
+            # Third row (if we have GT pose): Splats with GT pose, Output with GT pose, Difference
+            if has_pose_comparisons and 'output_gt_pose' in sample:
+                # Compute difference between predicted and GT outputs
+                diff = np.abs(sample['output'][0] - sample.get('output_gt_pose', sample['output'])[0])
+                row3_volumes = {
+                    'Splats (GT)': sample.get('raw_splats_gt_pose', sample['raw_splats'])[0],
+                    'Output (GT)': sample.get('output_gt_pose', sample['output'])[0],
+                    'Diff |Pred-GT|': diff
+                }
             
             # Add source type label for the first column
             source_type = sample.get('source_type', 'unknown')
