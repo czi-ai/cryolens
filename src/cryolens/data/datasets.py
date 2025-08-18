@@ -292,7 +292,26 @@ class CachedParquetDataset(Dataset):
                         if len(orientation_np) == 4:
                             # Make a copy to ensure the array is writable
                             orientation_np = orientation_np.copy()
-                            orientation = torch.from_numpy(orientation_np).float()
+                            
+                            # Check for NaN/Inf values
+                            if np.isnan(orientation_np).any() or np.isinf(orientation_np).any():
+                                if track_item:
+                                    print(f"Item {idx}: WARNING - NaN/Inf in orientation data: {orientation_np}")
+                                orientation = None
+                            else:
+                                # Validate axis-angle format: axis should be normalized
+                                axis_norm = np.linalg.norm(orientation_np[1:4])
+                                if abs(axis_norm - 1.0) > 0.1:  # Allow some tolerance
+                                    if track_item:
+                                        print(f"Item {idx}: WARNING - Axis not normalized (norm={axis_norm}): {orientation_np}")
+                                    # Normalize the axis part
+                                    if axis_norm > 1e-6:
+                                        orientation_np[1:4] = orientation_np[1:4] / axis_norm
+                                    else:
+                                        # Zero axis - set to default [0, 0, 0, 1] (z-axis)
+                                        orientation_np = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+                                
+                                orientation = torch.from_numpy(orientation_np).float()
                         else:
                             if track_item:
                                 print(f"Item {idx}: orientation has wrong shape: {len(orientation_np)}")
