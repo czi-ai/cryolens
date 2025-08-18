@@ -756,7 +756,7 @@ class TomoTwinDataset(Dataset):
         Returns
         -------
         tuple
-            (volume, molecule_id)
+            (volume, molecule_id) or (volume, molecule_id, orientation) if orientation data exists
         """
         try:
             if self.dataset is None or self.total_items == 0:
