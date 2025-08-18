@@ -742,9 +742,19 @@ class VisualizationCallback(Callback):
         if not all_samples or len(all_samples) == 0:
             print(f"Warning: No samples collected for visualization at epoch {epoch}")
             return
+        
+        # Check if any samples have pose comparisons
+        has_pose_comparisons = False
+        for mol_id, samples in all_samples.items():
+            for sample in samples:
+                if 'output_gt_pose' in sample:
+                    has_pose_comparisons = True
+                    break
+            if has_pose_comparisons:
+                break
             
         # Create visualization
-        fig, gs = self.plotter.setup_figure(len(all_samples))
+        fig, gs = self.plotter.setup_figure(len(all_samples), has_pose_comparisons)
         
         # Plot each molecule
         for mol_idx, (mol_id, samples) in enumerate(sorted(all_samples.items())):
