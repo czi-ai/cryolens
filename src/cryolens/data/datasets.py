@@ -286,7 +286,16 @@ class CachedParquetDataset(Dataset):
                 if pose_data is not None:
                     try:
                         if isinstance(pose_data, bytes):
-                            pose = np.frombuffer(pose_data, dtype=np.float32)
+                            # CRITICAL FIX: The pose data was saved as float64 bytes
+                            # The zarr_to_parquet script saves quaternion/axis_angle as float64
+                            # So we need to read as float64 first
+                            if len(pose_data) == 32:  # 4 float64 values = 32 bytes
+                                pose = np.frombuffer(pose_data, dtype=np.float64)
+                            elif len(pose_data) == 16:  # 4 float32 values = 16 bytes
+                                pose = np.frombuffer(pose_data, dtype=np.float32)
+                            else:
+                                # Unexpected size, try float32 and take first 4
+                                pose = np.frombuffer(pose_data, dtype=np.float32)[:4]
                         elif isinstance(pose_data, str):
                             # Parse string representation if needed
                             import ast
@@ -304,8 +313,8 @@ class CachedParquetDataset(Dataset):
                             # Return without pose
                             return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
                         else:
-                            # Convert to tensor with correct shape
-                            pose = torch.from_numpy(pose).to(dtype=torch.float32)
+                            # Convert to tensor with correct shape (always float32 for model)
+                            pose = torch.from_numpy(pose.astype(np.float32)).to(dtype=torch.float32)
                             return subvolume, torch.tensor(molecule_idx, dtype=torch.long), pose
                     except Exception as e:
                         if self.rank == 0 or self.rank is None:
