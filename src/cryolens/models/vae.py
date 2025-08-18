@@ -222,6 +222,9 @@ class AffinityVAE(nn.Module):
         crossover_probability: float = 0.5,
         use_variational_pose: bool = False,  # NEW: flag to enable variational pose
         pose_beta: float = 0.001,  # NEW: KL weight for pose
+        use_supervised_pose: bool = False,  # NEW: flag for supervised pose training
+        pose_warmup_epochs: int = 50,  # NEW: epochs for teacher forcing warmup
+        pose_supervision_weight: float = 1.0,  # NEW: weight for supervised pose loss
     ):
         super().__init__()
 
@@ -231,6 +234,9 @@ class AffinityVAE(nn.Module):
         self.pose_channels = pose_channels
         self.use_variational_pose = use_variational_pose  # NEW
         self.pose_beta = pose_beta  # NEW
+        self.use_supervised_pose = use_supervised_pose  # NEW: supervised pose flag
+        self.pose_warmup_epochs = pose_warmup_epochs  # NEW: teacher forcing warmup
+        self.pose_supervision_weight = pose_supervision_weight  # NEW: supervised loss weight
 
         flat_shape = self.encoder.flat_shape
 
