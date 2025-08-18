@@ -14,10 +14,10 @@ class VisualizationConfig:
     """Configuration for visualization parameters"""
     every_n_epochs: int = 50                # How often to generate visualizations
     num_batches: int = 10                   # Number of batches to sample (for non-memoized sampling)
-    max_samples_per_mol: int = 10           # Maximum samples to show per molecule
+    max_samples_per_mol: int = 3            # Maximum samples to show per molecule (reduced from 10)
     samples_per_mol_per_source: int = 5     # Number of samples to collect per molecule per source type
     fig_width: int = 15                     # Width of the figure in inches
-    dpi: int = 150                          # Resolution of the output images
+    dpi: int = 100                          # Resolution of the output images (reduced from 150)
     save_numpy_arrays: bool = True          # Whether to save raw numpy arrays
     organize_by_source: bool = True         # Whether to organize visualizations by source type
     
