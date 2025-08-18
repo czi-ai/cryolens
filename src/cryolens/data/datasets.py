@@ -287,19 +287,29 @@ class CachedParquetDataset(Dataset):
                     try:
                         if isinstance(pose_data, bytes):
                             pose = np.frombuffer(pose_data, dtype=np.float32)
+                        elif isinstance(pose_data, str):
+                            # Parse string representation if needed
+                            import ast
+                            pose = np.array(ast.literal_eval(pose_data), dtype=np.float32)
                         else:
                             pose = np.array(pose_data, dtype=np.float32)
                         
+                        # Flatten if needed and ensure correct shape
+                        pose = pose.flatten()
+                        
                         # Ensure pose has correct shape (should be 4 values for axis-angle)
                         if pose.shape[0] != 4:
-                            print(f"WARNING: Pose has shape {pose.shape}, expected 4 values")
-                            pose = None
+                            if self.rank == 0 or self.rank is None:
+                                print(f"WARNING: Pose has shape {pose.shape}, expected 4 values. Skipping pose.")
+                            # Return without pose
+                            return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
                         else:
-                            # Convert to tensor
+                            # Convert to tensor with correct shape
                             pose = torch.from_numpy(pose).to(dtype=torch.float32)
                             return subvolume, torch.tensor(molecule_idx, dtype=torch.long), pose
                     except Exception as e:
-                        print(f"Error processing pose data: {e}")
+                        if self.rank == 0 or self.rank is None:
+                            print(f"Error processing pose data: {e}")
                         # Fall through to return without pose
             
             return subvolume, torch.tensor(molecule_idx, dtype=torch.long)
