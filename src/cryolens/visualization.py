@@ -229,30 +229,35 @@ class VisualizationCallback(Callback):
                 # Process samples for this molecule and source
                 for idx in indices:
                     # Get sample directly using the memoized index
-                    sample_data = dataset.get_sample_by_index(idx)
-                    # Handle different return formats (2, 3, or 4 values)
-                    pose_data = None
-                    source_type = None
-                    
-                    if len(sample_data) == 2:
-                        # Old format: (subvolume, mol_id)
-                        subvolume, mol_id = sample_data
-                    elif len(sample_data) == 3:
-                        # Could be (subvolume, mol_id, source_type) or (subvolume, mol_id, pose)
-                        # Check the type of the third element
-                        if isinstance(sample_data[2], str):
-                            # It's source_type
-                            subvolume, mol_id, source_type = sample_data
+                    try:
+                        sample_data = dataset.get_sample_by_index(idx)
+                        # Handle different return formats (2, 3, or 4 values)
+                        pose_data = None
+                        source_type = None
+                        
+                        if len(sample_data) == 2:
+                            # Old format: (subvolume, mol_id)
+                            subvolume, mol_id = sample_data
+                        elif len(sample_data) == 3:
+                            # Could be (subvolume, mol_id, source_type) or (subvolume, mol_id, pose)
+                            # Check the type of the third element
+                            if isinstance(sample_data[2], str):
+                                # It's source_type
+                                subvolume, mol_id, source_type = sample_data
+                            else:
+                                # It's pose data
+                                subvolume, mol_id, pose_data = sample_data
+                        elif len(sample_data) == 4:
+                            # Full format: (subvolume, mol_id, pose, source_type)
+                            subvolume, mol_id, pose_data, source_type = sample_data
                         else:
-                            # It's pose data
-                            subvolume, mol_id, pose_data = sample_data
-                    elif len(sample_data) == 4:
-                        # Full format: (subvolume, mol_id, pose, source_type)
-                        subvolume, mol_id, pose_data, source_type = sample_data
-                    else:
-                        # Unexpected format, use first two values
-                        subvolume = sample_data[0]
-                        mol_id = sample_data[1]
+                            # Unexpected format, use first two values
+                            subvolume = sample_data[0]
+                            mol_id = sample_data[1]
+                    except ValueError as e:
+                        print(f"Warning: Error collecting visualization sample: {e}")
+                        print(f"  Sample data length: {len(sample_data) if 'sample_data' in locals() else 'unknown'}")
+                        continue
                     
                     # Skip if molecule ID is invalid
                     if mol_id == -1:
