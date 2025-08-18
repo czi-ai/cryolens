@@ -761,10 +761,18 @@ class VisualizationCallback(Callback):
             self.plotter.plot_molecule(fig, gs, samples, mol_idx, mol_id)
         
         # Add row descriptors on the left margin
-        plt.figtext(0.01, 0.75, "Row 1: Input / Combined Splats / Background Splats", 
-                  ha='left', va='center', fontsize=10, rotation=90)
-        plt.figtext(0.01, 0.25, "Row 2: Affinity Splats / Combined Output / Affinity Output", 
-                  ha='left', va='center', fontsize=10, rotation=90)
+        if has_pose_comparisons:
+            plt.figtext(0.01, 0.83, "Row 1: Input / Splats (Pred) / Background", 
+                      ha='left', va='center', fontsize=9, rotation=90)
+            plt.figtext(0.01, 0.50, "Row 2: Affinity / Output (Pred) / Affinity Conv", 
+                      ha='left', va='center', fontsize=9, rotation=90)
+            plt.figtext(0.01, 0.17, "Row 3: Splats (GT) / Output (GT) / |Pred-GT|", 
+                      ha='left', va='center', fontsize=9, rotation=90)
+        else:
+            plt.figtext(0.01, 0.75, "Row 1: Input / Splats / Background", 
+                      ha='left', va='center', fontsize=10, rotation=90)
+            plt.figtext(0.01, 0.25, "Row 2: Affinity / Output / Affinity Conv", 
+                      ha='left', va='center', fontsize=10, rotation=90)
         
         # Save with minimal padding
         fig_path = os.path.join(viz_dir, f'3d_visualization_epoch_{epoch}.png')
