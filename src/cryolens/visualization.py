@@ -855,15 +855,40 @@ class VisualizationCallback(Callback):
                         total_error += error
                         total_samples_with_error += 1
             
+            # Collect all errors for more detailed statistics
+            all_errors = []
+            for mol_id, samples in all_samples.items():
+                for sample in samples:
+                    if 'pose_error' in sample and sample['pose_error'] is not None:
+                        all_errors.append(sample['pose_error'])
+            
             # Write summary statistics
             f.write("\n" + "=" * 80 + "\n")
             f.write("Summary Statistics:\n")
             f.write("-" * 40 + "\n")
             
-            if total_samples_with_error > 0:
-                avg_error = total_error / total_samples_with_error
+            if all_errors:
+                errors_array = np.array(all_errors)
+                avg_error = np.mean(errors_array)
+                std_error = np.std(errors_array)
+                min_error = np.min(errors_array)
+                max_error = np.max(errors_array)
+                median_error = np.median(errors_array)
+                
                 f.write(f"Average Geodesic Error: {avg_error:.4f} rad ({np.degrees(avg_error):.2f}°)\n")
-                f.write(f"Total Samples with Error: {total_samples_with_error}\n")
+                f.write(f"Standard Deviation: {std_error:.4f} rad ({np.degrees(std_error):.2f}°)\n")
+                f.write(f"Median Error: {median_error:.4f} rad ({np.degrees(median_error):.2f}°)\n")
+                f.write(f"Min Error: {min_error:.4f} rad ({np.degrees(min_error):.2f}°)\n")
+                f.write(f"Max Error: {max_error:.4f} rad ({np.degrees(max_error):.2f}°)\n")
+                f.write(f"Total Samples with Error: {len(all_errors)}\n")
+                
+                # Add histogram buckets
+                f.write("\nError Distribution (degrees):\n")
+                bins = [0, 5, 10, 15, 30, 45, 60, 90, 180]
+                errors_deg = np.degrees(errors_array)
+                hist, _ = np.histogram(errors_deg, bins=bins)
+                for i in range(len(bins)-1):
+                    f.write(f"  {bins[i]:3d}° - {bins[i+1]:3d}°: {hist[i]:4d} samples ({100*hist[i]/len(errors_deg):5.1f}%)\n")
             else:
                 f.write("No pose errors computed (may be in unsupervised mode)\n")
         
