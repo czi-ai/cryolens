@@ -312,13 +312,33 @@ class VisualizationCallback(Callback):
                     # Move to device
                     subvolume = subvolume.to(pl_module.device)
                     mol_id = mol_id.to(pl_module.device)
+                    if pose_data is not None and not isinstance(pose_data, torch.Tensor):
+                        pose_data = torch.tensor(pose_data, dtype=torch.float32)
+                    if pose_data is not None:
+                        pose_data = pose_data.to(pl_module.device)
                     
                     # Get standard output
                     output = pl_module(subvolume.unsqueeze(0))  # Add batch dimension
                     reconstructed, z, generated_pose, global_weight, mu, log_var = output
                     
-                    # Use generated pose if none returned from forward pass
+                    # Use generated pose
                     pose = generated_pose
+                    
+                    # Calculate pose error if we have ground truth
+                    pose_error = None
+                    if pose_data is not None and pose is not None:
+                        try:
+                            # Calculate geodesic distance between poses if we have the loss function
+                            if hasattr(pl_module, 'geodesic_pose_loss'):
+                                with torch.no_grad():
+                                    # Ensure both poses have batch dimension
+                                    true_pose_batch = pose_data.unsqueeze(0) if pose_data.dim() == 1 else pose_data
+                                    pred_pose_batch = pose.unsqueeze(0) if pose.dim() == 1 else pose
+                                    pose_error = pl_module.geodesic_pose_loss(pred_pose_batch, true_pose_batch)
+                                    pose_error = pose_error.item()
+                        except Exception as e:
+                            print(f"Error computing pose error: {e}")
+                            pose_error = None
                     
                     # Make sure pose is not None before trying to decode splats
                     if pose is None:
