@@ -84,7 +84,7 @@ class VisualizationPlotter:
         
     def plot_molecule(self, fig: plt.Figure, gs: plt.GridSpec, 
                      mol_data: List, mol_idx: int, mol_id: int) -> None:
-        """Plot visualizations for a single molecule with source type information"""
+        """Plot visualizations for a single molecule with source type and pose information"""
         # Each molecule's samples now take 2 rows per sample
         base_row = mol_idx * self.config.max_samples_per_mol * 2
         
@@ -127,8 +127,18 @@ class VisualizationPlotter:
             # Add source type label for the first column
             source_type = sample.get('source_type', 'unknown')
             
-            # Plot first row
-            self._plot_volumes(fig, gs, row1_volumes, sample_base_row, source_label=source_type, row_label="Row 1")
+            # Prepare pose information if available
+            pose_info = {}
+            if 'true_pose' in sample:
+                pose_info['true_pose'] = sample['true_pose']
+            if 'pred_pose' in sample:
+                pose_info['pred_pose'] = sample['pred_pose']
+            if 'pose_error' in sample:
+                pose_info['pose_error'] = sample['pose_error']
+            
+            # Plot first row with pose information
+            self._plot_volumes(fig, gs, row1_volumes, sample_base_row, 
+                             source_label=source_type, row_label="Row 1", pose_info=pose_info)
             
             # Plot second row
             self._plot_volumes(fig, gs, row2_volumes, sample_base_row + 1, row_label="Row 2")
