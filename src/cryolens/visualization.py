@@ -189,6 +189,9 @@ class VisualizationCallback(Callback):
         """Collect samples using memoized visualization samples, limiting to a subset of structures"""
         all_samples = defaultdict(list)
         
+        # Check if dataset has return_poses enabled
+        dataset_has_poses = hasattr(dataset, 'return_poses') and dataset.return_poses
+        
         # Get memoized visualization samples
         viz_samples = dataset.get_visualization_samples(self.samples_per_mol_per_source)
         
