@@ -720,6 +720,89 @@ class VisualizationCallback(Callback):
         except Exception as e:
             print(f"Error logging visualization artifact: {str(e)}")
     
+    def _log_pose_summary(self, all_samples, epoch, viz_dir):
+        """Log a text summary of pose information for all samples."""
+        # Check if we have any pose data
+        has_poses = False
+        for mol_id, samples in all_samples.items():
+            for sample in samples:
+                if 'true_pose' in sample or 'pred_pose' in sample:
+                    has_poses = True
+                    break
+            if has_poses:
+                break
+        
+        if not has_poses:
+            return
+        
+        # Create pose summary file
+        pose_summary_file = os.path.join(viz_dir, f'pose_summary_epoch_{epoch}.txt')
+        
+        with open(pose_summary_file, 'w') as f:
+            f.write(f"Pose Summary - Epoch {epoch}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            total_error = 0
+            total_samples_with_error = 0
+            
+            for mol_id, samples in sorted(all_samples.items()):
+                f.write(f"\nMolecule {mol_id}:\n")
+                f.write("-" * 40 + "\n")
+                
+                for i, sample in enumerate(samples):
+                    source_type = sample.get('source_type', 'unknown')
+                    f.write(f"\n  Sample {i+1} (Source: {source_type}):\n")
+                    
+                    if 'true_pose' in sample:
+                        true_pose = sample['true_pose']
+                        if true_pose is not None:
+                            if isinstance(true_pose, np.ndarray):
+                                if len(true_pose) == 4:
+                                    f.write(f"    Ground Truth Pose (axis-angle): [{true_pose[0]:.4f}, {true_pose[1]:.4f}, {true_pose[2]:.4f}, {true_pose[3]:.4f}]\n")
+                                    # Interpret as angle, axis_x, axis_y, axis_z
+                                    f.write(f"      Angle: {true_pose[0]:.4f} rad ({np.degrees(true_pose[0]):.2f}°)\n")
+                                    f.write(f"      Axis: [{true_pose[1]:.4f}, {true_pose[2]:.4f}, {true_pose[3]:.4f}]\n")
+                                else:
+                                    f.write(f"    Ground Truth Pose: {true_pose}\n")
+                    
+                    if 'pred_pose' in sample:
+                        pred_pose = sample['pred_pose']
+                        if pred_pose is not None:
+                            if isinstance(pred_pose, np.ndarray):
+                                if len(pred_pose) == 4:
+                                    f.write(f"    Predicted Pose (axis-angle): [{pred_pose[0]:.4f}, {pred_pose[1]:.4f}, {pred_pose[2]:.4f}, {pred_pose[3]:.4f}]\n")
+                                    f.write(f"      Angle: {pred_pose[0]:.4f} rad ({np.degrees(pred_pose[0]):.2f}°)\n")
+                                    f.write(f"      Axis: [{pred_pose[1]:.4f}, {pred_pose[2]:.4f}, {pred_pose[3]:.4f}]\n")
+                                else:
+                                    f.write(f"    Predicted Pose: {pred_pose}\n")
+                    
+                    if 'pose_error' in sample:
+                        error = sample['pose_error']
+                        f.write(f"    Geodesic Error: {error:.4f} rad ({np.degrees(error):.2f}°)\n")
+                        total_error += error
+                        total_samples_with_error += 1
+            
+            # Write summary statistics
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("Summary Statistics:\n")
+            f.write("-" * 40 + "\n")
+            
+            if total_samples_with_error > 0:
+                avg_error = total_error / total_samples_with_error
+                f.write(f"Average Geodesic Error: {avg_error:.4f} rad ({np.degrees(avg_error):.2f}°)\n")
+                f.write(f"Total Samples with Error: {total_samples_with_error}\n")
+            else:
+                f.write("No pose errors computed (may be in unsupervised mode)\n")
+        
+        print(f"Pose summary saved to: {pose_summary_file}")
+        
+        # Also print a brief summary to console
+        if total_samples_with_error > 0:
+            avg_error = total_error / total_samples_with_error
+            print(f"\nPose Summary - Epoch {epoch}:")
+            print(f"  Average Geodesic Error: {avg_error:.4f} rad ({np.degrees(avg_error):.2f}°)")
+            print(f"  Total Samples: {total_samples_with_error}")
+    
     def _create_source_specific_visualizations(self, all_samples, epoch, viz_dir, pl_module):
         """Create separate visualizations for each source type"""
         # Group samples by source type
