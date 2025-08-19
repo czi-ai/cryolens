@@ -13,6 +13,7 @@ import traceback
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 
 def fallback_to_cpu(method):
@@ -562,6 +563,16 @@ class AffinityVAE(nn.Module):
         if self.use_variational_pose:
             pose_mu = self.pose_mu(encoded)
             pose_log_var = self.pose_log_var(encoded)
+            
+            # CRITICAL FIX: Bound the angle mean to reasonable range before sampling
+            if self.pose_channels == 4:
+                # Apply tanh to angle component and scale to [-pi, pi]
+                angle_mu = torch.tanh(pose_mu[:, 0:1]) * np.pi
+                pose_mu = torch.cat([angle_mu, pose_mu[:, 1:4]], dim=1)
+            elif self.pose_channels == 1:
+                # For 1D rotation, bound to [-pi, pi]
+                pose_mu = torch.tanh(pose_mu) * np.pi
+            
             # Sample pose
             pose = self.reparameterize_pose(pose_mu, pose_log_var)
             # Store for KL computation
@@ -589,6 +600,17 @@ class AffinityVAE(nn.Module):
                                 print(f"  axis norm mean: {axis_norm.mean().item():.4f}, std: {axis_norm.std().item():.4f}")
         else:
             pose = self.pose(encoded)
+            # CRITICAL FIX: Bound the angle to reasonable range
+            if self.pose_channels == 4:
+                # Apply tanh to angle and scale to [-pi, pi]
+                angle = torch.tanh(pose[:, 0:1]) * np.pi
+                axis = pose[:, 1:4]
+                # Normalize axis to unit vector
+                axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
+                pose = torch.cat([angle, axis], dim=1)
+            elif self.pose_channels == 1:
+                # For 1D rotation, bound to [-pi, pi]
+                pose = torch.tanh(pose) * np.pi
             
         global_weight = self.global_weight(encoded)
         
