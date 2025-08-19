@@ -162,12 +162,13 @@ class ContrastiveAffinityLoss(nn.Module):
             
             # Adaptive identity enforcement for same-structure pairs
             # Gradually enforce distance = 0 for same structure over first 500 epochs
-            identity_alpha = min(1.0, current_epoch / 500.0)
+            # Capped at 0.5 to allow for structural heterogeneity
+            identity_alpha = min(0.5, current_epoch / 500.0)
             
             # Log when identity enforcement becomes active (once)
             if identity_alpha > 0 and not hasattr(self, '_identity_logged'):
                 print(f"\n[ContrastiveAffinityLoss] Identity enforcement activated at epoch {current_epoch}")
-                print(f"  Alpha: {identity_alpha:.3f} (will reach 1.0 at epoch 500)")
+                print(f"  Alpha: {identity_alpha:.3f} (will reach 0.5 max at epoch 250)")
                 self._identity_logged = True
             
             if identity_alpha > 0:
@@ -1007,12 +1008,13 @@ class AffinityCosineLoss(nn.Module):
             
             # Adaptive identity enforcement for same-structure pairs
             # Gradually enforce L2 distance = 0 for same structure over first 500 epochs
-            identity_alpha = min(1.0, current_epoch / 500.0)
+            # Capped at 0.5 to allow for structural heterogeneity
+            identity_alpha = min(0.5, current_epoch / 500.0)
             
             # Log when identity enforcement becomes active (once)
             if identity_alpha > 0 and not hasattr(self, '_identity_logged'):
                 print(f"\n[AffinityCosineLoss] Identity enforcement activated at epoch {current_epoch}")
-                print(f"  Alpha: {identity_alpha:.3f} (will reach 1.0 at epoch 500)")
+                print(f"  Alpha: {identity_alpha:.3f} (will reach 0.5 max at epoch 250)")
                 self._identity_logged = True
             
             if identity_alpha > 0:
