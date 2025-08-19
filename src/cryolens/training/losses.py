@@ -50,9 +50,9 @@ class ContrastiveAffinityLoss(nn.Module):
         print(f"  Background-background similarity: {self.background_sim}")
         print(f"  Background-object similarity: {self.background_other_sim}")
 
-    def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
+    def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False, current_epoch: int = 0) -> torch.Tensor:
         """
-        Compute contrastive affinity loss with background handling.
+        Compute contrastive affinity loss with background handling and adaptive identity enforcement.
         
         Parameters
         ----------
@@ -62,6 +62,8 @@ class ContrastiveAffinityLoss(nn.Module):
             Predicted embeddings.
         per_sample : bool
             Whether to return per-sample losses.
+        current_epoch : int
+            Current training epoch for adaptive identity enforcement (default: 0).
             
         Returns
         -------
@@ -155,8 +157,42 @@ class ContrastiveAffinityLoss(nn.Module):
             margin_dist = torch.clamp(self.margin - distances, min=0)
             dissimilar_term = (1 - target_similarities) * (margin_dist ** 2)
             
-            # Combined loss
-            losses = similar_term + dissimilar_term
+            # Combined base loss
+            base_losses = similar_term + dissimilar_term
+            
+            # Adaptive identity enforcement for same-structure pairs
+            # Gradually enforce distance = 0 for same structure over first 500 epochs
+            identity_alpha = min(1.0, current_epoch / 500.0)
+            
+            # Log when identity enforcement becomes active (once)
+            if identity_alpha > 0 and not hasattr(self, '_identity_logged'):
+                print(f"\n[ContrastiveAffinityLoss] Identity enforcement activated at epoch {current_epoch}")
+                print(f"  Alpha: {identity_alpha:.3f} (will reach 1.0 at epoch 500)")
+                self._identity_logged = True
+            
+            if identity_alpha > 0:
+                # Find same-structure pairs
+                structure_ids_1 = y_true[c[:, 0]]
+                structure_ids_2 = y_true[c[:, 1]]
+                
+                # Same structure = same ID and both not background (-1)
+                same_structure = (structure_ids_1 == structure_ids_2) & (structure_ids_1 >= 0)
+                
+                if torch.any(same_structure):
+                    # For same-structure pairs, enforce zero distance
+                    # Identity loss = squared distance (drives to 0)
+                    identity_losses = distances ** 2
+                    
+                    # Interpolate: same-structure pairs get identity loss, others keep base loss
+                    losses = torch.where(
+                        same_structure,
+                        (1 - identity_alpha) * base_losses + identity_alpha * identity_losses,
+                        base_losses
+                    )
+                else:
+                    losses = base_losses
+            else:
+                losses = base_losses
             
             # Periodic debug output (every 100 steps)
             if hasattr(self, '_debug_counter'):
@@ -871,8 +907,8 @@ class AffinityCosineLoss(nn.Module):
         print(f"  Background-background similarity: {self.background_sim}")
         print(f"  Background-object similarity: {self.background_other_sim}")
 
-    def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
-        """Compute affinity loss with background handling.
+    def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False, current_epoch: int = 0) -> torch.Tensor:
+        """Compute affinity loss with background handling and adaptive identity enforcement.
         
         Parameters
         ----------
@@ -882,6 +918,8 @@ class AffinityCosineLoss(nn.Module):
             Predicted embeddings.
         per_sample : bool
             Whether to return per-sample losses.
+        current_epoch : int
+            Current training epoch for adaptive identity enforcement (default: 0).
             
         Returns
         -------
@@ -964,8 +1002,41 @@ class AffinityCosineLoss(nn.Module):
                     valid_similarities = self.lookup[valid_obj_indices1, valid_obj_indices2]
                     target_similarities[both_obj_mask][valid_indices] = valid_similarities
             
-            # Calculate loss
-            losses = self.l1loss(latent_similarity, target_similarities)
+            # Calculate base similarity loss
+            similarity_losses = self.l1loss(latent_similarity, target_similarities)
+            
+            # Adaptive identity enforcement for same-structure pairs
+            # Gradually enforce L2 distance = 0 for same structure over first 500 epochs
+            identity_alpha = min(1.0, current_epoch / 500.0)
+            
+            # Log when identity enforcement becomes active (once)
+            if identity_alpha > 0 and not hasattr(self, '_identity_logged'):
+                print(f"\n[AffinityCosineLoss] Identity enforcement activated at epoch {current_epoch}")
+                print(f"  Alpha: {identity_alpha:.3f} (will reach 1.0 at epoch 500)")
+                self._identity_logged = True
+            
+            if identity_alpha > 0:
+                # Find same-structure pairs (diagonal excluded as it's same sample)
+                structure_ids_1 = y_true[c[:, 0]]
+                structure_ids_2 = y_true[c[:, 1]]
+                
+                # Same structure = same ID and both not background (-1)
+                same_structure = (structure_ids_1 == structure_ids_2) & (structure_ids_1 >= 0)
+                
+                if torch.any(same_structure):
+                    # Calculate L2 distances for same-structure pairs
+                    l2_distances = torch.norm(features1 - features2, p=2, dim=1)
+                    
+                    # Identity loss only for same-structure pairs
+                    identity_losses = torch.zeros_like(l2_distances)
+                    identity_losses[same_structure] = l2_distances[same_structure]
+                    
+                    # Interpolate between similarity loss and identity loss
+                    losses = (1 - identity_alpha) * similarity_losses + identity_alpha * identity_losses
+                else:
+                    losses = similarity_losses
+            else:
+                losses = similarity_losses
             
             # Return per-sample or mean loss
             if per_sample:
