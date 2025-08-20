@@ -376,6 +376,121 @@ class GeodesicPoseLoss(nn.Module):
             return geodesic_dist
 
 
+class GramDisentanglementLoss(nn.Module):
+    """
+    Gram matrix-based disentanglement loss following DINOv3 approach.
+    
+    This loss enforces orthogonality between content and pose features by
+    minimizing correlation in their Gram matrices, while handling background
+    samples specially.
+    
+    Parameters
+    ----------
+    device : torch.device
+        Device for computation.
+    temperature : float
+        Temperature for softmax normalization (default: 0.1).
+    """
+    
+    def __init__(self, device: torch.device, temperature: float = 0.1):
+        super().__init__()
+        self.device = device
+        self.temperature = temperature
+        
+    def forward(
+        self, 
+        content_features: torch.Tensor, 
+        pose_features: torch.Tensor, 
+        mol_id: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute Gram disentanglement loss.
+        
+        Parameters
+        ----------
+        content_features : torch.Tensor
+            Content features [batch_size, content_dim].
+        pose_features : torch.Tensor
+            Pose features [batch_size, pose_dim].
+        mol_id : torch.Tensor
+            Molecule IDs for each sample (-1 for background).
+            
+        Returns
+        -------
+        torch.Tensor
+            Gram disentanglement loss.
+        """
+        # CRITICAL: Handle background samples (mol_id == -1)
+        non_bg_mask = mol_id != -1
+        
+        if non_bg_mask.sum() < 2:
+            # Not enough non-background samples for meaningful loss
+            return torch.tensor(0.0, device=self.device)
+        
+        # Only use non-background samples
+        content_feat = content_features[non_bg_mask]
+        pose_feat = pose_features[non_bg_mask]
+        mol_id_filtered = mol_id[non_bg_mask]
+        
+        batch_size = content_feat.shape[0]
+        
+        # Normalize features
+        content_feat = F.normalize(content_feat, p=2, dim=1)
+        pose_feat = F.normalize(pose_feat, p=2, dim=1)
+        
+        # Compute Gram matrices (pairwise similarities)
+        content_gram = torch.mm(content_feat, content_feat.t()) / self.temperature
+        pose_gram = torch.mm(pose_feat, pose_feat.t()) / self.temperature
+        
+        # Create structure similarity matrix (binary: same structure or not)
+        mol_id_expanded = mol_id_filtered.unsqueeze(1).expand(-1, batch_size)
+        mol_id_transposed = mol_id_filtered.unsqueeze(0).expand(batch_size, -1)
+        same_structure = (mol_id_expanded == mol_id_transposed).float()
+        
+        # Mask out diagonal (self-similarity)
+        mask = 1 - torch.eye(batch_size, device=self.device)
+        same_structure = same_structure * mask
+        
+        # For same structure pairs:
+        # - Content should be similar (high Gram value)
+        # - Pose can vary (no constraint)
+        # For different structure pairs:
+        # - Content should be different (low Gram value)
+        # - Pose similarity doesn't matter
+        
+        # Compute losses
+        # 1. Same structure: maximize content similarity
+        same_struct_loss = -torch.sum(same_structure * content_gram) / (same_structure.sum() + 1e-8)
+        
+        # 2. Different structure: minimize content similarity
+        diff_structure = (1 - same_structure) * mask
+        diff_struct_loss = torch.sum(diff_structure * torch.abs(content_gram)) / (diff_structure.sum() + 1e-8)
+        
+        # 3. Orthogonality: minimize correlation between content and pose Gram matrices
+        # This encourages disentanglement
+        orthogonality_loss = torch.abs(torch.sum(content_gram * pose_gram * mask)) / (mask.sum() + 1e-8)
+        
+        # Combine losses
+        total_loss = same_struct_loss + diff_struct_loss + orthogonality_loss
+        
+        # Debug output periodically
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        
+        if self._debug_counter % 100 == 0:
+            print(f"\n[GramDisentanglementLoss Debug]")
+            print(f"  Non-background samples: {batch_size}/{len(mol_id)}")
+            print(f"  Same structure pairs: {same_structure.sum().item():.0f}")
+            print(f"  Different structure pairs: {diff_structure.sum().item():.0f}")
+            print(f"  Same struct loss: {same_struct_loss.item():.4f}")
+            print(f"  Diff struct loss: {diff_struct_loss.item():.4f}")
+            print(f"  Orthogonality loss: {orthogonality_loss.item():.4f}")
+            print(f"  Total loss: {total_loss.item():.4f}")
+        
+        return total_loss
+
+
 class PoseWarmupScheduler:
     """
     Manages transition from supervised to unsupervised pose learning.
@@ -834,6 +949,121 @@ class GeodesicPoseLoss(nn.Module):
             return geodesic_dist
 
 
+class GramDisentanglementLoss(nn.Module):
+    """
+    Gram matrix-based disentanglement loss following DINOv3 approach.
+    
+    This loss enforces orthogonality between content and pose features by
+    minimizing correlation in their Gram matrices, while handling background
+    samples specially.
+    
+    Parameters
+    ----------
+    device : torch.device
+        Device for computation.
+    temperature : float
+        Temperature for softmax normalization (default: 0.1).
+    """
+    
+    def __init__(self, device: torch.device, temperature: float = 0.1):
+        super().__init__()
+        self.device = device
+        self.temperature = temperature
+        
+    def forward(
+        self, 
+        content_features: torch.Tensor, 
+        pose_features: torch.Tensor, 
+        mol_id: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute Gram disentanglement loss.
+        
+        Parameters
+        ----------
+        content_features : torch.Tensor
+            Content features [batch_size, content_dim].
+        pose_features : torch.Tensor
+            Pose features [batch_size, pose_dim].
+        mol_id : torch.Tensor
+            Molecule IDs for each sample (-1 for background).
+            
+        Returns
+        -------
+        torch.Tensor
+            Gram disentanglement loss.
+        """
+        # CRITICAL: Handle background samples (mol_id == -1)
+        non_bg_mask = mol_id != -1
+        
+        if non_bg_mask.sum() < 2:
+            # Not enough non-background samples for meaningful loss
+            return torch.tensor(0.0, device=self.device)
+        
+        # Only use non-background samples
+        content_feat = content_features[non_bg_mask]
+        pose_feat = pose_features[non_bg_mask]
+        mol_id_filtered = mol_id[non_bg_mask]
+        
+        batch_size = content_feat.shape[0]
+        
+        # Normalize features
+        content_feat = F.normalize(content_feat, p=2, dim=1)
+        pose_feat = F.normalize(pose_feat, p=2, dim=1)
+        
+        # Compute Gram matrices (pairwise similarities)
+        content_gram = torch.mm(content_feat, content_feat.t()) / self.temperature
+        pose_gram = torch.mm(pose_feat, pose_feat.t()) / self.temperature
+        
+        # Create structure similarity matrix (binary: same structure or not)
+        mol_id_expanded = mol_id_filtered.unsqueeze(1).expand(-1, batch_size)
+        mol_id_transposed = mol_id_filtered.unsqueeze(0).expand(batch_size, -1)
+        same_structure = (mol_id_expanded == mol_id_transposed).float()
+        
+        # Mask out diagonal (self-similarity)
+        mask = 1 - torch.eye(batch_size, device=self.device)
+        same_structure = same_structure * mask
+        
+        # For same structure pairs:
+        # - Content should be similar (high Gram value)
+        # - Pose can vary (no constraint)
+        # For different structure pairs:
+        # - Content should be different (low Gram value)
+        # - Pose similarity doesn't matter
+        
+        # Compute losses
+        # 1. Same structure: maximize content similarity
+        same_struct_loss = -torch.sum(same_structure * content_gram) / (same_structure.sum() + 1e-8)
+        
+        # 2. Different structure: minimize content similarity
+        diff_structure = (1 - same_structure) * mask
+        diff_struct_loss = torch.sum(diff_structure * torch.abs(content_gram)) / (diff_structure.sum() + 1e-8)
+        
+        # 3. Orthogonality: minimize correlation between content and pose Gram matrices
+        # This encourages disentanglement
+        orthogonality_loss = torch.abs(torch.sum(content_gram * pose_gram * mask)) / (mask.sum() + 1e-8)
+        
+        # Combine losses
+        total_loss = same_struct_loss + diff_struct_loss + orthogonality_loss
+        
+        # Debug output periodically
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        
+        if self._debug_counter % 100 == 0:
+            print(f"\n[GramDisentanglementLoss Debug]")
+            print(f"  Non-background samples: {batch_size}/{len(mol_id)}")
+            print(f"  Same structure pairs: {same_structure.sum().item():.0f}")
+            print(f"  Different structure pairs: {diff_structure.sum().item():.0f}")
+            print(f"  Same struct loss: {same_struct_loss.item():.4f}")
+            print(f"  Diff struct loss: {diff_struct_loss.item():.4f}")
+            print(f"  Orthogonality loss: {orthogonality_loss.item():.4f}")
+            print(f"  Total loss: {total_loss.item():.4f}")
+        
+        return total_loss
+
+
 class PoseWarmupScheduler:
     """
     Manages transition from supervised to unsupervised pose learning.
@@ -1205,6 +1435,121 @@ class GeodesicPoseLoss(nn.Module):
             return geodesic_dist.sum()
         else:
             return geodesic_dist
+
+
+class GramDisentanglementLoss(nn.Module):
+    """
+    Gram matrix-based disentanglement loss following DINOv3 approach.
+    
+    This loss enforces orthogonality between content and pose features by
+    minimizing correlation in their Gram matrices, while handling background
+    samples specially.
+    
+    Parameters
+    ----------
+    device : torch.device
+        Device for computation.
+    temperature : float
+        Temperature for softmax normalization (default: 0.1).
+    """
+    
+    def __init__(self, device: torch.device, temperature: float = 0.1):
+        super().__init__()
+        self.device = device
+        self.temperature = temperature
+        
+    def forward(
+        self, 
+        content_features: torch.Tensor, 
+        pose_features: torch.Tensor, 
+        mol_id: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute Gram disentanglement loss.
+        
+        Parameters
+        ----------
+        content_features : torch.Tensor
+            Content features [batch_size, content_dim].
+        pose_features : torch.Tensor
+            Pose features [batch_size, pose_dim].
+        mol_id : torch.Tensor
+            Molecule IDs for each sample (-1 for background).
+            
+        Returns
+        -------
+        torch.Tensor
+            Gram disentanglement loss.
+        """
+        # CRITICAL: Handle background samples (mol_id == -1)
+        non_bg_mask = mol_id != -1
+        
+        if non_bg_mask.sum() < 2:
+            # Not enough non-background samples for meaningful loss
+            return torch.tensor(0.0, device=self.device)
+        
+        # Only use non-background samples
+        content_feat = content_features[non_bg_mask]
+        pose_feat = pose_features[non_bg_mask]
+        mol_id_filtered = mol_id[non_bg_mask]
+        
+        batch_size = content_feat.shape[0]
+        
+        # Normalize features
+        content_feat = F.normalize(content_feat, p=2, dim=1)
+        pose_feat = F.normalize(pose_feat, p=2, dim=1)
+        
+        # Compute Gram matrices (pairwise similarities)
+        content_gram = torch.mm(content_feat, content_feat.t()) / self.temperature
+        pose_gram = torch.mm(pose_feat, pose_feat.t()) / self.temperature
+        
+        # Create structure similarity matrix (binary: same structure or not)
+        mol_id_expanded = mol_id_filtered.unsqueeze(1).expand(-1, batch_size)
+        mol_id_transposed = mol_id_filtered.unsqueeze(0).expand(batch_size, -1)
+        same_structure = (mol_id_expanded == mol_id_transposed).float()
+        
+        # Mask out diagonal (self-similarity)
+        mask = 1 - torch.eye(batch_size, device=self.device)
+        same_structure = same_structure * mask
+        
+        # For same structure pairs:
+        # - Content should be similar (high Gram value)
+        # - Pose can vary (no constraint)
+        # For different structure pairs:
+        # - Content should be different (low Gram value)
+        # - Pose similarity doesn't matter
+        
+        # Compute losses
+        # 1. Same structure: maximize content similarity
+        same_struct_loss = -torch.sum(same_structure * content_gram) / (same_structure.sum() + 1e-8)
+        
+        # 2. Different structure: minimize content similarity
+        diff_structure = (1 - same_structure) * mask
+        diff_struct_loss = torch.sum(diff_structure * torch.abs(content_gram)) / (diff_structure.sum() + 1e-8)
+        
+        # 3. Orthogonality: minimize correlation between content and pose Gram matrices
+        # This encourages disentanglement
+        orthogonality_loss = torch.abs(torch.sum(content_gram * pose_gram * mask)) / (mask.sum() + 1e-8)
+        
+        # Combine losses
+        total_loss = same_struct_loss + diff_struct_loss + orthogonality_loss
+        
+        # Debug output periodically
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        
+        if self._debug_counter % 100 == 0:
+            print(f"\n[GramDisentanglementLoss Debug]")
+            print(f"  Non-background samples: {batch_size}/{len(mol_id)}")
+            print(f"  Same structure pairs: {same_structure.sum().item():.0f}")
+            print(f"  Different structure pairs: {diff_structure.sum().item():.0f}")
+            print(f"  Same struct loss: {same_struct_loss.item():.4f}")
+            print(f"  Diff struct loss: {diff_struct_loss.item():.4f}")
+            print(f"  Orthogonality loss: {orthogonality_loss.item():.4f}")
+            print(f"  Total loss: {total_loss.item():.4f}")
+        
+        return total_loss
 
 
 class PoseWarmupScheduler:
