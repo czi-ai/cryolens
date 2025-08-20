@@ -1071,16 +1071,53 @@ def create_tomotwin_dataloader(
     else:
         per_gpu_batch_size = max(min_batch_size, config.batch_size)
     
-    # Create distributed sampler if using DDP
+    # Create appropriate sampler based on configuration
     sampler = None
-    if dist_config:
-        sampler = DistributedSampler(
-            dataset,
-            num_replicas=dist_config.world_size,
-            rank=dist_config.node_rank * dist_config.devices_per_node + dist_config.local_rank,
-            shuffle=True,
-            seed=171717
-        )
+    if use_structured_sampler:
+        # Use structured sampler for k×m batch composition
+        try:
+            from cryolens.data.structured_sampler import StructuredIndexSampler, DistributedStructuredSampler
+            
+            if dist_config:
+                sampler = DistributedStructuredSampler(
+                    dataset=dataset,
+                    structures_per_batch=structures_per_batch,
+                    poses_per_structure=poses_per_structure,
+                    background_fraction=background_ratio,
+                    num_replicas=dist_config.world_size,
+                    rank=dist_config.node_rank * dist_config.devices_per_node + dist_config.local_rank,
+                    shuffle=True,
+                    seed=171717,
+                    drop_last=True,
+                    samples_per_epoch=samples_per_epoch
+                )
+                per_gpu_batch_size = structures_per_batch * poses_per_structure
+                logger.info(f"Using distributed structured sampler with {structures_per_batch}×{poses_per_structure} composition")
+            else:
+                sampler = StructuredIndexSampler(
+                    dataset=dataset,
+                    structures_per_batch=structures_per_batch,
+                    poses_per_structure=poses_per_structure,
+                    background_fraction=background_ratio,
+                    shuffle=True,
+                    seed=171717
+                )
+                per_gpu_batch_size = structures_per_batch * poses_per_structure
+                logger.info(f"Using structured sampler with {structures_per_batch}×{poses_per_structure} composition")
+        except ImportError:
+            logger.warning("Structured sampler not available, falling back to standard sampler")
+            use_structured_sampler = False
+    
+    if not use_structured_sampler:
+        # Use standard distributed sampler
+        if dist_config:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=dist_config.world_size,
+                rank=dist_config.node_rank * dist_config.devices_per_node + dist_config.local_rank,
+                shuffle=True,
+                seed=171717
+            )
     
     # Use fewer workers to avoid potential deadlocks and thread contention
     # For distributed training stability, use fewer workers per GPU
