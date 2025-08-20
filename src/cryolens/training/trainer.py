@@ -349,7 +349,8 @@ def create_trainer(
     logger: Logger,
     num_epochs: int = 1000,
     dist_config: Optional[DistributedConfig] = None,
-    callbacks: Optional[List[Callback]] = None
+    callbacks: Optional[List[Callback]] = None,
+    find_unused_parameters: bool = False  # NEW: Add flag for unused parameters
 ) -> Trainer:
     """Create trainer with proper distributed setup."""
     
@@ -451,12 +452,15 @@ def create_trainer(
                 
         # Configure DDP strategy with improved settings to avoid deadlocks
         ddp_kwargs = {
-            "find_unused_parameters": False,  # Set to False to avoid potential NCCL deadlocks
+            "find_unused_parameters": find_unused_parameters,  # Use the passed flag
             "process_group_backend": "nccl",
             "timeout": timedelta(minutes=3),   # Shorter timeout to fail fast if there's a problem
             "static_graph": False,           # Disable static graph optimization which can cause issues
             "gradient_as_bucket_view": True,  # Memory optimization
         }
+        
+        if find_unused_parameters:
+            print(f"Rank {rank}:{local_rank}: DDP configured with find_unused_parameters=True for frozen parameters")
         
         # Create Lightning environment
         cluster_env = create_lightning_environment(dist_config)
