@@ -376,6 +376,253 @@ class GeodesicPoseLoss(nn.Module):
             return geodesic_dist
 
 
+class PairwiseGeodesicDistanceLoss(nn.Module):
+    """
+    Loss that matches pairwise geodesic distances between poses within each structure.
+    This ensures the model learns relative pose relationships without requiring
+    alignment to specific ground truth orientations.
+    
+    Parameters
+    ----------
+    pose_channels : int
+        Number of pose channels (1 for single rotation, 4 for axis-angle)
+    structures_per_batch : int
+        Number of structures per batch
+    poses_per_structure : int
+        Number of poses per structure
+    distance_loss_type : str
+        Type of loss to use for comparing distance matrices ('mse', 'l1', or 'huber')
+    """
+    
+    def __init__(self, pose_channels: int = 4, structures_per_batch: int = 4, 
+                 poses_per_structure: int = 4, distance_loss_type: str = 'mse'):
+        super().__init__()
+        self.pose_channels = pose_channels
+        self.structures_per_batch = structures_per_batch
+        self.poses_per_structure = poses_per_structure
+        self.distance_loss_type = distance_loss_type
+        
+        # Create base geodesic loss for distance computation (no reduction)
+        self.geodesic_base = GeodesicPoseLoss(pose_channels=pose_channels, reduction='none')
+        
+        print(f"PairwiseGeodesicDistanceLoss initialized:")
+        print(f"  Pose channels: {pose_channels}")
+        print(f"  Structures per batch: {structures_per_batch}")
+        print(f"  Poses per structure: {poses_per_structure}")
+        print(f"  Distance loss type: {distance_loss_type}")
+    
+    def compute_pairwise_distances(self, poses: torch.Tensor) -> torch.Tensor:
+        """
+        Compute pairwise geodesic distances for a set of poses.
+        
+        Parameters
+        ----------
+        poses : torch.Tensor
+            Shape (N, pose_channels) tensor of poses
+            
+        Returns
+        -------
+        torch.Tensor
+            (N, N) distance matrix
+        """
+        n = poses.shape[0]
+        distances = torch.zeros((n, n), device=poses.device, dtype=poses.dtype)
+        
+        # Compute upper triangular part of distance matrix
+        for i in range(n):
+            for j in range(i+1, n):
+                # Compute geodesic distance between pose i and pose j
+                dist = self.geodesic_base(poses[i:i+1], poses[j:j+1])
+                distances[i, j] = dist
+                distances[j, i] = dist  # Symmetric matrix
+        
+        return distances
+    
+    def compute_pairwise_distances_vectorized(self, poses: torch.Tensor) -> torch.Tensor:
+        """
+        Compute pairwise geodesic distances for a set of poses (vectorized version).
+        More efficient for larger batches.
+        
+        Parameters
+        ----------
+        poses : torch.Tensor
+            Shape (N, pose_channels) tensor of poses
+            
+        Returns
+        -------
+        torch.Tensor
+            (N, N) distance matrix
+        """
+        n = poses.shape[0]
+        
+        if self.pose_channels == 4:
+            # Convert all poses to rotation matrices at once
+            matrices = self.geodesic_base.axis_angle_to_matrix(poses)  # (N, 3, 3)
+            
+            # Compute pairwise relative rotations: R_rel[i,j] = R_i @ R_j^T
+            # Expand for broadcasting: (N, 1, 3, 3) @ (1, N, 3, 3)
+            R_i = matrices.unsqueeze(1)  # (N, 1, 3, 3)
+            R_j = matrices.unsqueeze(0)  # (1, N, 3, 3)
+            R_rel = torch.matmul(R_i, R_j.transpose(-2, -1))  # (N, N, 3, 3)
+            
+            # Extract angles from relative rotations
+            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)  # (N, N)
+            cos_angle = (trace - 1) / 2
+            cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            distances = torch.acos(cos_angle)
+            
+        elif self.pose_channels == 1:
+            # For 1D rotation, use angular distance
+            poses_wrapped = torch.remainder(poses + np.pi, 2 * np.pi) - np.pi
+            diff = poses_wrapped.unsqueeze(1) - poses_wrapped.unsqueeze(0)  # (N, N, 1)
+            distances = torch.abs(torch.remainder(diff + np.pi, 2 * np.pi) - np.pi).squeeze(-1)
+            
+        else:
+            # Fallback to L2 distance
+            poses_expanded_i = poses.unsqueeze(1)  # (N, 1, pose_channels)
+            poses_expanded_j = poses.unsqueeze(0)  # (1, N, pose_channels)
+            distances = torch.norm(poses_expanded_i - poses_expanded_j, p=2, dim=-1)
+        
+        return distances
+    
+    def forward(self, pred_poses: torch.Tensor, true_poses: torch.Tensor, 
+                mol_ids: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute pairwise distance matching loss.
+        
+        Parameters
+        ----------
+        pred_poses : torch.Tensor
+            Predicted poses of shape (B, pose_channels)
+        true_poses : torch.Tensor
+            Ground truth poses of shape (B, pose_channels)
+        mol_ids : torch.Tensor, optional
+            Molecule IDs of shape (B,) to identify which structure each pose belongs to.
+            If provided, will use this to group poses instead of assuming fixed batch structure.
+            
+        Returns
+        -------
+        torch.Tensor
+            Scalar loss
+        """
+        # Ensure tensors are on same device and dtype
+        if pred_poses.device != true_poses.device:
+            true_poses = true_poses.to(pred_poses.device)
+        if pred_poses.dtype != true_poses.dtype:
+            true_poses = true_poses.to(pred_poses.dtype)
+        
+        batch_size = pred_poses.shape[0]
+        
+        # Check for NaN in inputs
+        if torch.isnan(pred_poses).any() or torch.isnan(true_poses).any():
+            print(f"WARNING: NaN in pose inputs to PairwiseGeodesicDistanceLoss")
+            return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+        
+        total_loss = torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+        num_structures = 0
+        
+        if mol_ids is not None:
+            # Use mol_ids to group poses by structure
+            unique_structures = torch.unique(mol_ids)
+            
+            for struct_id in unique_structures:
+                # Get indices for this structure
+                struct_mask = (mol_ids == struct_id)
+                if struct_mask.sum() < 2:
+                    # Skip structures with less than 2 poses
+                    continue
+                    
+                # Get poses for this structure
+                pred_struct = pred_poses[struct_mask]
+                true_struct = true_poses[struct_mask]
+                
+                # Compute pairwise distance matrices
+                pred_distances = self.compute_pairwise_distances_vectorized(pred_struct)
+                true_distances = self.compute_pairwise_distances_vectorized(true_struct)
+                
+                # Compare distance matrices
+                if self.distance_loss_type == 'mse':
+                    struct_loss = F.mse_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'l1':
+                    struct_loss = F.l1_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'huber':
+                    struct_loss = F.smooth_l1_loss(pred_distances, true_distances)
+                else:
+                    raise ValueError(f"Unknown distance loss type: {self.distance_loss_type}")
+                
+                total_loss = total_loss + struct_loss
+                num_structures += 1
+                
+                # Debug output for first structure
+                if num_structures == 1 and hasattr(self, '_debug_counter'):
+                    self._debug_counter += 1
+                    if self._debug_counter % 100 == 0:
+                        print(f"\nPairwise Distance Loss Debug (step {self._debug_counter}):")
+                        print(f"  Structure {struct_id.item()}: {struct_mask.sum().item()} poses")
+                        print(f"  Pred distances - Min: {pred_distances.min():.4f}, Max: {pred_distances.max():.4f}, Mean: {pred_distances.mean():.4f}")
+                        print(f"  True distances - Min: {true_distances.min():.4f}, Max: {true_distances.max():.4f}, Mean: {true_distances.mean():.4f}")
+                        print(f"  Structure loss: {struct_loss.item():.4f}")
+                elif not hasattr(self, '_debug_counter'):
+                    self._debug_counter = 0
+            
+            if num_structures == 0:
+                print(f"WARNING: No valid structures found for pairwise distance loss")
+                return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+                
+        else:
+            # Use fixed batch structure (original implementation)
+            if batch_size != self.structures_per_batch * self.poses_per_structure:
+                print(f"WARNING: Batch size {batch_size} doesn't match expected "
+                      f"{self.structures_per_batch} * {self.poses_per_structure} = "
+                      f"{self.structures_per_batch * self.poses_per_structure}")
+                # Try to adapt by using actual batch dimensions
+                actual_structures = batch_size // self.poses_per_structure
+                if batch_size % self.poses_per_structure != 0:
+                    print(f"WARNING: Batch size not divisible by poses_per_structure")
+                    return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+            else:
+                actual_structures = self.structures_per_batch
+            
+            # Reshape to group by structure
+            pred_grouped = pred_poses.view(actual_structures, self.poses_per_structure, self.pose_channels)
+            true_grouped = true_poses.view(actual_structures, self.poses_per_structure, self.pose_channels)
+            
+            for struct_idx in range(actual_structures):
+                # Get poses for this structure
+                pred_struct = pred_grouped[struct_idx]  # (poses_per_structure, pose_channels)
+                true_struct = true_grouped[struct_idx]
+                
+                # Compute pairwise distance matrices
+                pred_distances = self.compute_pairwise_distances_vectorized(pred_struct)
+                true_distances = self.compute_pairwise_distances_vectorized(true_struct)
+                
+                # Compare distance matrices
+                if self.distance_loss_type == 'mse':
+                    struct_loss = F.mse_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'l1':
+                    struct_loss = F.l1_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'huber':
+                    struct_loss = F.smooth_l1_loss(pred_distances, true_distances)
+                else:
+                    raise ValueError(f"Unknown distance loss type: {self.distance_loss_type}")
+                
+                total_loss = total_loss + struct_loss
+                num_structures = actual_structures
+        
+        # Average loss across structures
+        if num_structures > 0:
+            avg_loss = total_loss / num_structures
+        else:
+            avg_loss = total_loss
+            
+        # Final NaN check
+        if torch.isnan(avg_loss):
+            print(f"WARNING: NaN in final pairwise distance loss")
+            return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+            
+        return avg_loss
+
+
 class PoseWarmupScheduler:
     """
     Manages transition from supervised to unsupervised pose learning.
@@ -834,6 +1081,253 @@ class GeodesicPoseLoss(nn.Module):
             return geodesic_dist
 
 
+class PairwiseGeodesicDistanceLoss(nn.Module):
+    """
+    Loss that matches pairwise geodesic distances between poses within each structure.
+    This ensures the model learns relative pose relationships without requiring
+    alignment to specific ground truth orientations.
+    
+    Parameters
+    ----------
+    pose_channels : int
+        Number of pose channels (1 for single rotation, 4 for axis-angle)
+    structures_per_batch : int
+        Number of structures per batch
+    poses_per_structure : int
+        Number of poses per structure
+    distance_loss_type : str
+        Type of loss to use for comparing distance matrices ('mse', 'l1', or 'huber')
+    """
+    
+    def __init__(self, pose_channels: int = 4, structures_per_batch: int = 4, 
+                 poses_per_structure: int = 4, distance_loss_type: str = 'mse'):
+        super().__init__()
+        self.pose_channels = pose_channels
+        self.structures_per_batch = structures_per_batch
+        self.poses_per_structure = poses_per_structure
+        self.distance_loss_type = distance_loss_type
+        
+        # Create base geodesic loss for distance computation (no reduction)
+        self.geodesic_base = GeodesicPoseLoss(pose_channels=pose_channels, reduction='none')
+        
+        print(f"PairwiseGeodesicDistanceLoss initialized:")
+        print(f"  Pose channels: {pose_channels}")
+        print(f"  Structures per batch: {structures_per_batch}")
+        print(f"  Poses per structure: {poses_per_structure}")
+        print(f"  Distance loss type: {distance_loss_type}")
+    
+    def compute_pairwise_distances(self, poses: torch.Tensor) -> torch.Tensor:
+        """
+        Compute pairwise geodesic distances for a set of poses.
+        
+        Parameters
+        ----------
+        poses : torch.Tensor
+            Shape (N, pose_channels) tensor of poses
+            
+        Returns
+        -------
+        torch.Tensor
+            (N, N) distance matrix
+        """
+        n = poses.shape[0]
+        distances = torch.zeros((n, n), device=poses.device, dtype=poses.dtype)
+        
+        # Compute upper triangular part of distance matrix
+        for i in range(n):
+            for j in range(i+1, n):
+                # Compute geodesic distance between pose i and pose j
+                dist = self.geodesic_base(poses[i:i+1], poses[j:j+1])
+                distances[i, j] = dist
+                distances[j, i] = dist  # Symmetric matrix
+        
+        return distances
+    
+    def compute_pairwise_distances_vectorized(self, poses: torch.Tensor) -> torch.Tensor:
+        """
+        Compute pairwise geodesic distances for a set of poses (vectorized version).
+        More efficient for larger batches.
+        
+        Parameters
+        ----------
+        poses : torch.Tensor
+            Shape (N, pose_channels) tensor of poses
+            
+        Returns
+        -------
+        torch.Tensor
+            (N, N) distance matrix
+        """
+        n = poses.shape[0]
+        
+        if self.pose_channels == 4:
+            # Convert all poses to rotation matrices at once
+            matrices = self.geodesic_base.axis_angle_to_matrix(poses)  # (N, 3, 3)
+            
+            # Compute pairwise relative rotations: R_rel[i,j] = R_i @ R_j^T
+            # Expand for broadcasting: (N, 1, 3, 3) @ (1, N, 3, 3)
+            R_i = matrices.unsqueeze(1)  # (N, 1, 3, 3)
+            R_j = matrices.unsqueeze(0)  # (1, N, 3, 3)
+            R_rel = torch.matmul(R_i, R_j.transpose(-2, -1))  # (N, N, 3, 3)
+            
+            # Extract angles from relative rotations
+            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)  # (N, N)
+            cos_angle = (trace - 1) / 2
+            cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            distances = torch.acos(cos_angle)
+            
+        elif self.pose_channels == 1:
+            # For 1D rotation, use angular distance
+            poses_wrapped = torch.remainder(poses + np.pi, 2 * np.pi) - np.pi
+            diff = poses_wrapped.unsqueeze(1) - poses_wrapped.unsqueeze(0)  # (N, N, 1)
+            distances = torch.abs(torch.remainder(diff + np.pi, 2 * np.pi) - np.pi).squeeze(-1)
+            
+        else:
+            # Fallback to L2 distance
+            poses_expanded_i = poses.unsqueeze(1)  # (N, 1, pose_channels)
+            poses_expanded_j = poses.unsqueeze(0)  # (1, N, pose_channels)
+            distances = torch.norm(poses_expanded_i - poses_expanded_j, p=2, dim=-1)
+        
+        return distances
+    
+    def forward(self, pred_poses: torch.Tensor, true_poses: torch.Tensor, 
+                mol_ids: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute pairwise distance matching loss.
+        
+        Parameters
+        ----------
+        pred_poses : torch.Tensor
+            Predicted poses of shape (B, pose_channels)
+        true_poses : torch.Tensor
+            Ground truth poses of shape (B, pose_channels)
+        mol_ids : torch.Tensor, optional
+            Molecule IDs of shape (B,) to identify which structure each pose belongs to.
+            If provided, will use this to group poses instead of assuming fixed batch structure.
+            
+        Returns
+        -------
+        torch.Tensor
+            Scalar loss
+        """
+        # Ensure tensors are on same device and dtype
+        if pred_poses.device != true_poses.device:
+            true_poses = true_poses.to(pred_poses.device)
+        if pred_poses.dtype != true_poses.dtype:
+            true_poses = true_poses.to(pred_poses.dtype)
+        
+        batch_size = pred_poses.shape[0]
+        
+        # Check for NaN in inputs
+        if torch.isnan(pred_poses).any() or torch.isnan(true_poses).any():
+            print(f"WARNING: NaN in pose inputs to PairwiseGeodesicDistanceLoss")
+            return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+        
+        total_loss = torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+        num_structures = 0
+        
+        if mol_ids is not None:
+            # Use mol_ids to group poses by structure
+            unique_structures = torch.unique(mol_ids)
+            
+            for struct_id in unique_structures:
+                # Get indices for this structure
+                struct_mask = (mol_ids == struct_id)
+                if struct_mask.sum() < 2:
+                    # Skip structures with less than 2 poses
+                    continue
+                    
+                # Get poses for this structure
+                pred_struct = pred_poses[struct_mask]
+                true_struct = true_poses[struct_mask]
+                
+                # Compute pairwise distance matrices
+                pred_distances = self.compute_pairwise_distances_vectorized(pred_struct)
+                true_distances = self.compute_pairwise_distances_vectorized(true_struct)
+                
+                # Compare distance matrices
+                if self.distance_loss_type == 'mse':
+                    struct_loss = F.mse_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'l1':
+                    struct_loss = F.l1_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'huber':
+                    struct_loss = F.smooth_l1_loss(pred_distances, true_distances)
+                else:
+                    raise ValueError(f"Unknown distance loss type: {self.distance_loss_type}")
+                
+                total_loss = total_loss + struct_loss
+                num_structures += 1
+                
+                # Debug output for first structure
+                if num_structures == 1 and hasattr(self, '_debug_counter'):
+                    self._debug_counter += 1
+                    if self._debug_counter % 100 == 0:
+                        print(f"\nPairwise Distance Loss Debug (step {self._debug_counter}):")
+                        print(f"  Structure {struct_id.item()}: {struct_mask.sum().item()} poses")
+                        print(f"  Pred distances - Min: {pred_distances.min():.4f}, Max: {pred_distances.max():.4f}, Mean: {pred_distances.mean():.4f}")
+                        print(f"  True distances - Min: {true_distances.min():.4f}, Max: {true_distances.max():.4f}, Mean: {true_distances.mean():.4f}")
+                        print(f"  Structure loss: {struct_loss.item():.4f}")
+                elif not hasattr(self, '_debug_counter'):
+                    self._debug_counter = 0
+            
+            if num_structures == 0:
+                print(f"WARNING: No valid structures found for pairwise distance loss")
+                return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+                
+        else:
+            # Use fixed batch structure (original implementation)
+            if batch_size != self.structures_per_batch * self.poses_per_structure:
+                print(f"WARNING: Batch size {batch_size} doesn't match expected "
+                      f"{self.structures_per_batch} * {self.poses_per_structure} = "
+                      f"{self.structures_per_batch * self.poses_per_structure}")
+                # Try to adapt by using actual batch dimensions
+                actual_structures = batch_size // self.poses_per_structure
+                if batch_size % self.poses_per_structure != 0:
+                    print(f"WARNING: Batch size not divisible by poses_per_structure")
+                    return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+            else:
+                actual_structures = self.structures_per_batch
+            
+            # Reshape to group by structure
+            pred_grouped = pred_poses.view(actual_structures, self.poses_per_structure, self.pose_channels)
+            true_grouped = true_poses.view(actual_structures, self.poses_per_structure, self.pose_channels)
+            
+            for struct_idx in range(actual_structures):
+                # Get poses for this structure
+                pred_struct = pred_grouped[struct_idx]  # (poses_per_structure, pose_channels)
+                true_struct = true_grouped[struct_idx]
+                
+                # Compute pairwise distance matrices
+                pred_distances = self.compute_pairwise_distances_vectorized(pred_struct)
+                true_distances = self.compute_pairwise_distances_vectorized(true_struct)
+                
+                # Compare distance matrices
+                if self.distance_loss_type == 'mse':
+                    struct_loss = F.mse_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'l1':
+                    struct_loss = F.l1_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'huber':
+                    struct_loss = F.smooth_l1_loss(pred_distances, true_distances)
+                else:
+                    raise ValueError(f"Unknown distance loss type: {self.distance_loss_type}")
+                
+                total_loss = total_loss + struct_loss
+                num_structures = actual_structures
+        
+        # Average loss across structures
+        if num_structures > 0:
+            avg_loss = total_loss / num_structures
+        else:
+            avg_loss = total_loss
+            
+        # Final NaN check
+        if torch.isnan(avg_loss):
+            print(f"WARNING: NaN in final pairwise distance loss")
+            return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+            
+        return avg_loss
+
+
 class PoseWarmupScheduler:
     """
     Manages transition from supervised to unsupervised pose learning.
@@ -1205,6 +1699,253 @@ class GeodesicPoseLoss(nn.Module):
             return geodesic_dist.sum()
         else:
             return geodesic_dist
+
+
+class PairwiseGeodesicDistanceLoss(nn.Module):
+    """
+    Loss that matches pairwise geodesic distances between poses within each structure.
+    This ensures the model learns relative pose relationships without requiring
+    alignment to specific ground truth orientations.
+    
+    Parameters
+    ----------
+    pose_channels : int
+        Number of pose channels (1 for single rotation, 4 for axis-angle)
+    structures_per_batch : int
+        Number of structures per batch
+    poses_per_structure : int
+        Number of poses per structure
+    distance_loss_type : str
+        Type of loss to use for comparing distance matrices ('mse', 'l1', or 'huber')
+    """
+    
+    def __init__(self, pose_channels: int = 4, structures_per_batch: int = 4, 
+                 poses_per_structure: int = 4, distance_loss_type: str = 'mse'):
+        super().__init__()
+        self.pose_channels = pose_channels
+        self.structures_per_batch = structures_per_batch
+        self.poses_per_structure = poses_per_structure
+        self.distance_loss_type = distance_loss_type
+        
+        # Create base geodesic loss for distance computation (no reduction)
+        self.geodesic_base = GeodesicPoseLoss(pose_channels=pose_channels, reduction='none')
+        
+        print(f"PairwiseGeodesicDistanceLoss initialized:")
+        print(f"  Pose channels: {pose_channels}")
+        print(f"  Structures per batch: {structures_per_batch}")
+        print(f"  Poses per structure: {poses_per_structure}")
+        print(f"  Distance loss type: {distance_loss_type}")
+    
+    def compute_pairwise_distances(self, poses: torch.Tensor) -> torch.Tensor:
+        """
+        Compute pairwise geodesic distances for a set of poses.
+        
+        Parameters
+        ----------
+        poses : torch.Tensor
+            Shape (N, pose_channels) tensor of poses
+            
+        Returns
+        -------
+        torch.Tensor
+            (N, N) distance matrix
+        """
+        n = poses.shape[0]
+        distances = torch.zeros((n, n), device=poses.device, dtype=poses.dtype)
+        
+        # Compute upper triangular part of distance matrix
+        for i in range(n):
+            for j in range(i+1, n):
+                # Compute geodesic distance between pose i and pose j
+                dist = self.geodesic_base(poses[i:i+1], poses[j:j+1])
+                distances[i, j] = dist
+                distances[j, i] = dist  # Symmetric matrix
+        
+        return distances
+    
+    def compute_pairwise_distances_vectorized(self, poses: torch.Tensor) -> torch.Tensor:
+        """
+        Compute pairwise geodesic distances for a set of poses (vectorized version).
+        More efficient for larger batches.
+        
+        Parameters
+        ----------
+        poses : torch.Tensor
+            Shape (N, pose_channels) tensor of poses
+            
+        Returns
+        -------
+        torch.Tensor
+            (N, N) distance matrix
+        """
+        n = poses.shape[0]
+        
+        if self.pose_channels == 4:
+            # Convert all poses to rotation matrices at once
+            matrices = self.geodesic_base.axis_angle_to_matrix(poses)  # (N, 3, 3)
+            
+            # Compute pairwise relative rotations: R_rel[i,j] = R_i @ R_j^T
+            # Expand for broadcasting: (N, 1, 3, 3) @ (1, N, 3, 3)
+            R_i = matrices.unsqueeze(1)  # (N, 1, 3, 3)
+            R_j = matrices.unsqueeze(0)  # (1, N, 3, 3)
+            R_rel = torch.matmul(R_i, R_j.transpose(-2, -1))  # (N, N, 3, 3)
+            
+            # Extract angles from relative rotations
+            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(dim=-1)  # (N, N)
+            cos_angle = (trace - 1) / 2
+            cos_angle = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            distances = torch.acos(cos_angle)
+            
+        elif self.pose_channels == 1:
+            # For 1D rotation, use angular distance
+            poses_wrapped = torch.remainder(poses + np.pi, 2 * np.pi) - np.pi
+            diff = poses_wrapped.unsqueeze(1) - poses_wrapped.unsqueeze(0)  # (N, N, 1)
+            distances = torch.abs(torch.remainder(diff + np.pi, 2 * np.pi) - np.pi).squeeze(-1)
+            
+        else:
+            # Fallback to L2 distance
+            poses_expanded_i = poses.unsqueeze(1)  # (N, 1, pose_channels)
+            poses_expanded_j = poses.unsqueeze(0)  # (1, N, pose_channels)
+            distances = torch.norm(poses_expanded_i - poses_expanded_j, p=2, dim=-1)
+        
+        return distances
+    
+    def forward(self, pred_poses: torch.Tensor, true_poses: torch.Tensor, 
+                mol_ids: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute pairwise distance matching loss.
+        
+        Parameters
+        ----------
+        pred_poses : torch.Tensor
+            Predicted poses of shape (B, pose_channels)
+        true_poses : torch.Tensor
+            Ground truth poses of shape (B, pose_channels)
+        mol_ids : torch.Tensor, optional
+            Molecule IDs of shape (B,) to identify which structure each pose belongs to.
+            If provided, will use this to group poses instead of assuming fixed batch structure.
+            
+        Returns
+        -------
+        torch.Tensor
+            Scalar loss
+        """
+        # Ensure tensors are on same device and dtype
+        if pred_poses.device != true_poses.device:
+            true_poses = true_poses.to(pred_poses.device)
+        if pred_poses.dtype != true_poses.dtype:
+            true_poses = true_poses.to(pred_poses.dtype)
+        
+        batch_size = pred_poses.shape[0]
+        
+        # Check for NaN in inputs
+        if torch.isnan(pred_poses).any() or torch.isnan(true_poses).any():
+            print(f"WARNING: NaN in pose inputs to PairwiseGeodesicDistanceLoss")
+            return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+        
+        total_loss = torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+        num_structures = 0
+        
+        if mol_ids is not None:
+            # Use mol_ids to group poses by structure
+            unique_structures = torch.unique(mol_ids)
+            
+            for struct_id in unique_structures:
+                # Get indices for this structure
+                struct_mask = (mol_ids == struct_id)
+                if struct_mask.sum() < 2:
+                    # Skip structures with less than 2 poses
+                    continue
+                    
+                # Get poses for this structure
+                pred_struct = pred_poses[struct_mask]
+                true_struct = true_poses[struct_mask]
+                
+                # Compute pairwise distance matrices
+                pred_distances = self.compute_pairwise_distances_vectorized(pred_struct)
+                true_distances = self.compute_pairwise_distances_vectorized(true_struct)
+                
+                # Compare distance matrices
+                if self.distance_loss_type == 'mse':
+                    struct_loss = F.mse_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'l1':
+                    struct_loss = F.l1_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'huber':
+                    struct_loss = F.smooth_l1_loss(pred_distances, true_distances)
+                else:
+                    raise ValueError(f"Unknown distance loss type: {self.distance_loss_type}")
+                
+                total_loss = total_loss + struct_loss
+                num_structures += 1
+                
+                # Debug output for first structure
+                if num_structures == 1 and hasattr(self, '_debug_counter'):
+                    self._debug_counter += 1
+                    if self._debug_counter % 100 == 0:
+                        print(f"\nPairwise Distance Loss Debug (step {self._debug_counter}):")
+                        print(f"  Structure {struct_id.item()}: {struct_mask.sum().item()} poses")
+                        print(f"  Pred distances - Min: {pred_distances.min():.4f}, Max: {pred_distances.max():.4f}, Mean: {pred_distances.mean():.4f}")
+                        print(f"  True distances - Min: {true_distances.min():.4f}, Max: {true_distances.max():.4f}, Mean: {true_distances.mean():.4f}")
+                        print(f"  Structure loss: {struct_loss.item():.4f}")
+                elif not hasattr(self, '_debug_counter'):
+                    self._debug_counter = 0
+            
+            if num_structures == 0:
+                print(f"WARNING: No valid structures found for pairwise distance loss")
+                return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+                
+        else:
+            # Use fixed batch structure (original implementation)
+            if batch_size != self.structures_per_batch * self.poses_per_structure:
+                print(f"WARNING: Batch size {batch_size} doesn't match expected "
+                      f"{self.structures_per_batch} * {self.poses_per_structure} = "
+                      f"{self.structures_per_batch * self.poses_per_structure}")
+                # Try to adapt by using actual batch dimensions
+                actual_structures = batch_size // self.poses_per_structure
+                if batch_size % self.poses_per_structure != 0:
+                    print(f"WARNING: Batch size not divisible by poses_per_structure")
+                    return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+            else:
+                actual_structures = self.structures_per_batch
+            
+            # Reshape to group by structure
+            pred_grouped = pred_poses.view(actual_structures, self.poses_per_structure, self.pose_channels)
+            true_grouped = true_poses.view(actual_structures, self.poses_per_structure, self.pose_channels)
+            
+            for struct_idx in range(actual_structures):
+                # Get poses for this structure
+                pred_struct = pred_grouped[struct_idx]  # (poses_per_structure, pose_channels)
+                true_struct = true_grouped[struct_idx]
+                
+                # Compute pairwise distance matrices
+                pred_distances = self.compute_pairwise_distances_vectorized(pred_struct)
+                true_distances = self.compute_pairwise_distances_vectorized(true_struct)
+                
+                # Compare distance matrices
+                if self.distance_loss_type == 'mse':
+                    struct_loss = F.mse_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'l1':
+                    struct_loss = F.l1_loss(pred_distances, true_distances)
+                elif self.distance_loss_type == 'huber':
+                    struct_loss = F.smooth_l1_loss(pred_distances, true_distances)
+                else:
+                    raise ValueError(f"Unknown distance loss type: {self.distance_loss_type}")
+                
+                total_loss = total_loss + struct_loss
+                num_structures = actual_structures
+        
+        # Average loss across structures
+        if num_structures > 0:
+            avg_loss = total_loss / num_structures
+        else:
+            avg_loss = total_loss
+            
+        # Final NaN check
+        if torch.isnan(avg_loss):
+            print(f"WARNING: NaN in final pairwise distance loss")
+            return torch.tensor(0.0, device=pred_poses.device, dtype=pred_poses.dtype)
+            
+        return avg_loss
 
 
 class PoseWarmupScheduler:
