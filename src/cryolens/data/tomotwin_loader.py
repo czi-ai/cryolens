@@ -1061,15 +1061,18 @@ def create_tomotwin_dataloader(
     if rank == 0:
         logger.info(dataset.get_molecular_stats())
     
-    # Ensure minimum batch size per GPU
-    min_batch_size = 8  # Minimum required for similarity calculation
-    if dist_config:
-        # Calculate per-GPU batch size, ensuring it's at least min_batch_size
-        per_gpu_batch_size = max(min_batch_size, config.batch_size // dist_config.world_size)
-        # Adjust global batch size to maintain at least min_batch_size per GPU
-        config.batch_size = per_gpu_batch_size * dist_config.world_size
-    else:
-        per_gpu_batch_size = max(min_batch_size, config.batch_size)
+    # Set batch size based on sampler type
+    if not use_structured_sampler:
+        # Ensure minimum batch size per GPU for standard sampling
+        min_batch_size = 8  # Minimum required for similarity calculation
+        if dist_config:
+            # Calculate per-GPU batch size, ensuring it's at least min_batch_size
+            per_gpu_batch_size = max(min_batch_size, config.batch_size // dist_config.world_size)
+            # Adjust global batch size to maintain at least min_batch_size per GPU
+            config.batch_size = per_gpu_batch_size * dist_config.world_size
+        else:
+            per_gpu_batch_size = max(min_batch_size, config.batch_size)
+    # else: per_gpu_batch_size is already set by structured sampler
     
     # Create appropriate sampler based on configuration
     sampler = None
