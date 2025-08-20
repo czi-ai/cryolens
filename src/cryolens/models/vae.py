@@ -460,7 +460,11 @@ class AffinityVAE(nn.Module):
         if rank == 0:
             print(f"Forward pass completed in {total_time:.3f}s (encode: {encode_time:.3f}s, reparam: {reparameterize_time:.3f}s, decode: {decode_time:.3f}s)")
         
-        return x_recon, z, actual_pose, actual_global_weight, mu, log_var
+        # Return additional features if using dual-stream
+        if self.use_dual_stream and hasattr(self, '_last_content_features'):
+            return x_recon, z, actual_pose, actual_global_weight, mu, log_var, self._last_content_features, self._last_pose_features
+        else:
+            return x_recon, z, actual_pose, actual_global_weight, mu, log_var
 
     def reparameterize(
         self, mu: torch.Tensor, log_var: torch.Tensor
