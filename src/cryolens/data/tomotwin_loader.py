@@ -991,7 +991,10 @@ def create_tomotwin_dataloader(
     enable_background=False,
     background_ratio=0.2,
     background_params=None,
-    return_poses=False
+    return_poses=False,
+    use_structured_sampler=False,
+    structures_per_batch=8,
+    poses_per_structure=4
 ):
     """Create a DataLoader for TomoTwin data.
     
