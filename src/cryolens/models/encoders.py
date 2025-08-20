@@ -218,6 +218,87 @@ class ResidualBlock3D(torch.nn.Module):
         return out
 
 
+class DualStreamSeparator(torch.nn.Module):
+    """Separates encoded features into content and pose streams.
+    
+    Following DINOv3 approach, this module splits the encoded features into
+    two streams with different regularization strategies:
+    - Content stream: more regularization for invariance
+    - Pose stream: less regularization to preserve pose information
+    
+    Parameters
+    ----------
+    input_dim : int
+        Dimension of input features from encoder.
+    content_dim : int
+        Dimension of content features.
+    pose_dim : int
+        Dimension of pose features.
+    dropout_rate : float
+        Dropout rate for content stream (default: 0.2).
+    """
+    
+    def __init__(
+        self,
+        input_dim: int,
+        content_dim: int,
+        pose_dim: int,
+        dropout_rate: float = 0.2
+    ):
+        super().__init__()
+        
+        self.input_dim = input_dim
+        self.content_dim = content_dim
+        self.pose_dim = pose_dim
+        
+        # Content stream: more regularization for invariance
+        self.content_stream = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, input_dim // 2),
+            torch.nn.BatchNorm1d(input_dim // 2),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(dropout_rate),  # Higher dropout for invariance
+            torch.nn.Linear(input_dim // 2, content_dim)
+        )
+        
+        # Pose stream: less regularization to preserve pose info
+        self.pose_stream = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, input_dim // 2),
+            torch.nn.BatchNorm1d(input_dim // 2),
+            torch.nn.ReLU(),
+            # No dropout to preserve pose information
+            torch.nn.Linear(input_dim // 2, pose_dim)
+        )
+        
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights with Xavier initialization."""
+        for module in self.modules():
+            if isinstance(module, torch.nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    torch.nn.init.constant_(module.bias, 0)
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass to separate features.
+        
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input features from encoder [batch_size, input_dim].
+            
+        Returns
+        -------
+        tuple
+            (content_features, pose_features)
+        """
+        content_features = self.content_stream(x)
+        pose_features = self.pose_stream(x)
+        
+        return content_features, pose_features
+
+
 class ResNetEncoder3D(BaseEncoder):
     """3D ResNet-style encoder for volumetric data with residual connections.
     
