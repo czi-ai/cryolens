@@ -601,14 +601,77 @@ class AffinityVAE(nn.Module):
             Mean, log variance, pose, and global_weight.
         """
         # Ensure components are on same device
-        if self.use_variational_pose:
-            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
-                                   self.pose_mu, self.pose_log_var, self.global_weight)
+        if self.use_dual_stream:
+            if self.use_variational_pose:
+                self._ensure_same_device(x, self.encoder, self.dual_stream_separator,
+                                       self.mu, self.log_var, 
+                                       self.pose_mu, self.pose_log_var, self.global_weight)
+            else:
+                self._ensure_same_device(x, self.encoder, self.dual_stream_separator,
+                                       self.mu, self.log_var, 
+                                       self.pose, self.global_weight)
         else:
-            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
-                                   self.pose, self.global_weight)
+            if self.use_variational_pose:
+                self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+                                       self.pose_mu, self.pose_log_var, self.global_weight)
+            else:
+                self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+                                       self.pose, self.global_weight)
         
         encoded = self.encoder(x)
+        
+        # NEW: Apply dual-stream separation if enabled
+        if self.use_dual_stream:
+            content_features, pose_features = self.dual_stream_separator(encoded)
+            
+            # Store for later use in forward pass
+            self._last_content_features = content_features
+            self._last_pose_features = pose_features
+            
+            # Generate latent parameters from content features
+            mu = self.mu(content_features)
+            log_var = self.log_var(content_features)
+            
+            # Generate pose from pose features
+            if self.use_variational_pose:
+                pose_mu = self.pose_mu(pose_features)
+                pose_log_var = self.pose_log_var(pose_features)
+                
+                # CRITICAL FIX: Bound the angle mean to reasonable range before sampling
+                if self.pose_channels == 4:
+                    # Apply tanh to angle component and scale to [-pi, pi]
+                    angle_mu = torch.tanh(pose_mu[:, 0:1]) * np.pi
+                    pose_mu = torch.cat([angle_mu, pose_mu[:, 1:4]], dim=1)
+                elif self.pose_channels == 1:
+                    # For 1D rotation, bound to [-pi, pi]
+                    pose_mu = torch.tanh(pose_mu) * np.pi
+                
+                # Sample pose
+                pose = self.reparameterize_pose(pose_mu, pose_log_var)
+                # Store for KL computation
+                self._last_pose_mu = pose_mu
+                self._last_pose_log_var = pose_log_var
+            else:
+                pose = self.pose(pose_features)
+                # CRITICAL FIX: Bound the angle to reasonable range
+                if self.pose_channels == 4:
+                    # Apply tanh to angle and scale to [-pi, pi]
+                    angle = torch.tanh(pose[:, 0:1]) * np.pi
+                    axis = pose[:, 1:4]
+                    # Normalize axis to unit vector
+                    axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
+                    pose = torch.cat([angle, axis], dim=1)
+                elif self.pose_channels == 1:
+                    # For 1D rotation, bound to [-pi, pi]
+                    pose = torch.tanh(pose) * np.pi
+            
+            # Generate global weight from content features
+            global_weight = self.global_weight(content_features)
+            
+            return mu, log_var, pose, global_weight
+        
+        # Original single-stream processing
+        encoded = encoded  # Already computed above
         mu = self.mu(encoded)
         log_var = self.log_var(encoded)
         
