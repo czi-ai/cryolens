@@ -358,7 +358,7 @@ class AffinityVAE(nn.Module):
         return device
 
     @fallback_to_cpu
-    def forward(self, x: torch.Tensor, pose: Optional[torch.Tensor] = None, global_weight: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, pose: Optional[torch.Tensor] = None, global_weight: Optional[torch.Tensor] = None) -> Tuple:
         """Forward pass through the VAE.
         
         Parameters
@@ -371,8 +371,11 @@ class AffinityVAE(nn.Module):
             
         Returns
         -------
-        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-            Reconstructed data, latent representation, pose, mean, and log variance
+        tuple
+            If use_dual_stream is False:
+                (x_recon, z, pose, global_weight, mu, log_var)
+            If use_dual_stream is True:
+                (x_recon, z, pose, global_weight, mu, log_var, content_feat, pose_feat)
         """
         # Ensure all components are on the same device as input
         if self.use_variational_pose:
