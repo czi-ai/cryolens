@@ -1026,11 +1026,17 @@ def create_tomotwin_dataloader(
         Parameters for background generator
     return_poses : bool
         Whether to return pose information from parquet files
+    use_structured_sampler : bool
+        Whether to use structured batch sampler for k×m composition
+    structures_per_batch : int
+        Number of structures per batch when using structured sampler
+    poses_per_structure : int
+        Number of poses per structure when using structured sampler
         
     Returns
     -------
-    DataLoader
-        DataLoader for TomoTwin data
+    tuple
+        (DataLoader, Dataset) for TomoTwin data
     """
     # Get rank for logging
     rank = dist_config.node_rank if dist_config else 0
