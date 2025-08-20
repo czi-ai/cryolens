@@ -15,6 +15,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+# Import DualStreamSeparator for DINOv3-style architecture
+from cryolens.models.encoders import DualStreamSeparator
+
 
 def fallback_to_cpu(method):
     """
