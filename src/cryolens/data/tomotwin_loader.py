@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
+from cryolens.data.structured_sampler import create_structured_batch_sampler
 
 from cryolens.data.datasets import CachedParquetDataset
 
@@ -991,7 +992,10 @@ def create_tomotwin_dataloader(
     enable_background=False,
     background_ratio=0.2,
     background_params=None,
-    return_poses=False
+    return_poses=False,
+    use_structured_sampler=False,
+    structures_per_batch=None,
+    poses_per_structure=None
 ):
     """Create a DataLoader for TomoTwin data.
     
@@ -1023,6 +1027,12 @@ def create_tomotwin_dataloader(
         Parameters for background generator
     return_poses : bool
         Whether to return pose information from parquet files
+    use_structured_sampler : bool
+        Whether to use structured batch sampling (k structures × m poses)
+    structures_per_batch : int or None
+        Number of structures per batch when using structured sampler
+    poses_per_structure : int or None
+        Number of poses per structure when using structured sampler
         
     Returns
     -------
@@ -1068,9 +1078,54 @@ def create_tomotwin_dataloader(
     else:
         per_gpu_batch_size = max(min_batch_size, config.batch_size)
     
-    # Create distributed sampler if using DDP
+    # Create appropriate sampler based on configuration
     sampler = None
-    if dist_config:
+    batch_sampler = None
+    
+    if use_structured_sampler and structures_per_batch and poses_per_structure:
+        # Use structured batch sampler
+        batch_size_from_structure = structures_per_batch * poses_per_structure
+        
+        if dist_config:
+            # Distributed structured sampler
+            batch_sampler = create_structured_batch_sampler(
+                dataset=dataset,
+                structures_per_batch=structures_per_batch,
+                poses_per_structure=poses_per_structure,
+                samples_per_epoch=samples_per_epoch,
+                distributed=True,
+                num_replicas=dist_config.world_size,
+                rank=dist_config.node_rank * dist_config.devices_per_node + dist_config.local_rank,
+                include_background=enable_background or ('background' in (filtered_structure_ids or [])),
+                background_fraction=1.0 / structures_per_batch,  # One structure slot for background
+                seed=171717,
+                drop_last=True
+            )
+        else:
+            # Single GPU structured sampler
+            batch_sampler = create_structured_batch_sampler(
+                dataset=dataset,
+                structures_per_batch=structures_per_batch,
+                poses_per_structure=poses_per_structure,
+                samples_per_epoch=samples_per_epoch,
+                distributed=False,
+                include_background=enable_background or ('background' in (filtered_structure_ids or [])),
+                background_fraction=1.0 / structures_per_batch,
+                seed=171717,
+                drop_last=True
+            )
+        
+        # Override batch size when using structured sampler
+        per_gpu_batch_size = batch_size_from_structure
+        
+        if rank == 0:
+            logger.info(f"Using structured batch sampler:")
+            logger.info(f"  Structures per batch: {structures_per_batch}")
+            logger.info(f"  Poses per structure: {poses_per_structure}")
+            logger.info(f"  Effective batch size: {batch_size_from_structure}")
+    
+    elif dist_config and not use_structured_sampler:
+        # Standard distributed sampler
         sampler = DistributedSampler(
             dataset,
             num_replicas=dist_config.world_size,
@@ -1097,19 +1152,33 @@ def create_tomotwin_dataloader(
         logger.info(f"Using {num_workers} workers for dataloader with batch size {per_gpu_batch_size}")
     
     # Create dataloader with distributed settings and improved stability
-    dataloader = DataLoader(
-        dataset,
-        batch_size=per_gpu_batch_size,
-        shuffle=(sampler is None),  # Only shuffle if not using a sampler
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=True if torch.cuda.is_available() else False,
-        persistent_workers=(num_workers > 0),
-        drop_last=True,
-        prefetch_factor=1 if num_workers > 0 else None,  # Reduced from 2 to 1 for stability
-        timeout=600,  # Increased timeout for better stability
-        multiprocessing_context='spawn' if num_workers > 0 else None  # Use spawn for better error isolation
-    )
+    if batch_sampler is not None:
+        # When using batch_sampler, don't specify batch_size, shuffle, sampler, or drop_last
+        dataloader = DataLoader(
+            dataset,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            pin_memory=True if torch.cuda.is_available() else False,
+            persistent_workers=(num_workers > 0),
+            prefetch_factor=1 if num_workers > 0 else None,
+            timeout=600,
+            multiprocessing_context='spawn' if num_workers > 0 else None
+        )
+    else:
+        # Standard dataloader creation
+        dataloader = DataLoader(
+            dataset,
+            batch_size=per_gpu_batch_size,
+            shuffle=(sampler is None),  # Only shuffle if not using a sampler
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=True if torch.cuda.is_available() else False,
+            persistent_workers=(num_workers > 0),
+            drop_last=True,
+            prefetch_factor=1 if num_workers > 0 else None,  # Reduced from 2 to 1 for stability
+            timeout=600,  # Increased timeout for better stability
+            multiprocessing_context='spawn' if num_workers > 0 else None  # Use spawn for better error isolation
+        )
     
     if rank == 0:
         logger.info(f"Created TomoTwin DataLoader with {len(dataloader)} batches")
