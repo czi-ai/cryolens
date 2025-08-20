@@ -976,6 +976,50 @@ class TomoTwinDataset(Dataset):
                 return default_volume, default_mol_id, None, "unknown"
             else:
                 return default_volume, default_mol_id, "unknown"
+    
+    def get_structure_id(self, idx: int) -> int:
+        """Get structure ID for a given dataset index.
+        
+        This method is used by StructuredBatchSampler to organize batches.
+        
+        Parameters
+        ----------
+        idx : int
+            Dataset index.
+            
+        Returns
+        -------
+        int
+            Structure ID (molecule ID), or -1 for background samples.
+        """
+        try:
+            if self.dataset is None or idx >= self.total_items:
+                return -1
+            
+            # Check if this might be a background sample
+            if self.enable_background and self.background_generator:
+                # We can't determine if a specific index is background without sampling
+                # So we need to actually get the sample
+                sample = self.dataset[idx]
+                if len(sample) >= 2:
+                    mol_id = sample[1]
+                    if isinstance(mol_id, torch.Tensor):
+                        return mol_id.item()
+                    return mol_id
+            else:
+                # Regular dataset access
+                sample = self.dataset[idx]
+                if len(sample) >= 2:
+                    mol_id = sample[1]
+                    if isinstance(mol_id, torch.Tensor):
+                        return mol_id.item()
+                    return mol_id
+            
+            return -1
+            
+        except Exception as e:
+            logger.error(f"Error in get_structure_id({idx}): {str(e)}")
+            return -1
 
 
 def create_tomotwin_dataloader(
