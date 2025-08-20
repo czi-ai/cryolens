@@ -30,18 +30,20 @@ class DualStreamSeparator(nn.Module):
         super().__init__()
         
         # Content stream: more regularization for invariance
+        # Using LayerNorm instead of BatchNorm to handle single samples
         self.content_stream = nn.Sequential(
             nn.Linear(input_dim, input_dim // 2),
-            nn.BatchNorm1d(input_dim // 2),
+            nn.LayerNorm(input_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.2),  # Higher dropout for invariance
             nn.Linear(input_dim // 2, content_dim)
         )
         
         # Pose stream: less regularization to preserve pose info
+        # Using LayerNorm instead of BatchNorm to handle single samples
         self.pose_stream = nn.Sequential(
             nn.Linear(input_dim, input_dim // 2),
-            nn.BatchNorm1d(input_dim // 2),
+            nn.LayerNorm(input_dim // 2),
             nn.ReLU(),
             nn.Linear(input_dim // 2, pose_dim)
         )
