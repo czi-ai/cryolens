@@ -226,6 +226,10 @@ class AffinityVAE(nn.Module):
         crossover_probability: float = 0.5,
         use_variational_pose: bool = False,  # NEW: flag to enable variational pose
         pose_beta: float = 0.001,  # NEW: KL weight for pose
+        use_dual_stream: bool = False,  # NEW: Enable dual-stream architecture
+        content_dim: int = None,  # NEW: Content feature dimension
+        pose_feature_dim: int = None,  # NEW: Pose feature dimension (different from pose_channels)
+        dropout_rate: float = 0.2,  # NEW: Dropout for content stream
     ):
         super().__init__()
 
@@ -235,18 +239,59 @@ class AffinityVAE(nn.Module):
         self.pose_channels = pose_channels
         self.use_variational_pose = use_variational_pose  # NEW
         self.pose_beta = pose_beta  # NEW
+        self.use_dual_stream = use_dual_stream  # NEW
 
         flat_shape = self.encoder.flat_shape
-
-        self.mu = nn.Linear(flat_shape, latent_dims)
-        self.log_var = nn.Linear(flat_shape, latent_dims)
         
-        # MODIFIED: Add pose variance head if variational
-        if use_variational_pose:
-            self.pose_mu = nn.Linear(flat_shape, pose_channels)
-            self.pose_log_var = nn.Linear(flat_shape, pose_channels)
+        # NEW: Setup dual-stream architecture if enabled
+        if use_dual_stream:
+            # Default dimensions if not specified
+            if content_dim is None:
+                content_dim = latent_dims
+            if pose_feature_dim is None:
+                pose_feature_dim = latent_dims // 2
             
-            # Initialize pose networks with small values to start near identity rotation
+            self.content_dim = content_dim
+            self.pose_feature_dim = pose_feature_dim
+            
+            # Create dual-stream separator
+            self.dual_stream_separator = DualStreamSeparator(
+                input_dim=flat_shape,
+                content_dim=content_dim,
+                pose_dim=pose_feature_dim,
+                dropout_rate=dropout_rate
+            )
+            
+            # Content stream projections (from content features)
+            self.mu = nn.Linear(content_dim, latent_dims)
+            self.log_var = nn.Linear(content_dim, latent_dims)
+            
+            # Pose stream projections (from pose features)
+            if use_variational_pose:
+                self.pose_mu = nn.Linear(pose_feature_dim, pose_channels)
+                self.pose_log_var = nn.Linear(pose_feature_dim, pose_channels)
+            else:
+                self.pose = nn.Linear(pose_feature_dim, pose_channels)
+            
+            # Global weight from content features
+            self.global_weight = nn.Linear(content_dim, 1)
+            
+        else:
+            # Original single-stream architecture
+            self.mu = nn.Linear(flat_shape, latent_dims)
+            self.log_var = nn.Linear(flat_shape, latent_dims)
+            
+            # MODIFIED: Add pose variance head if variational
+            if use_variational_pose:
+                self.pose_mu = nn.Linear(flat_shape, pose_channels)
+                self.pose_log_var = nn.Linear(flat_shape, pose_channels)
+            else:
+                self.pose = nn.Linear(flat_shape, pose_channels)
+            
+            self.global_weight = nn.Linear(flat_shape, 1)
+        
+        # Initialize pose networks with small values to start near identity rotation
+        if use_variational_pose:
             with torch.no_grad():
                 # Initialize mean close to zero (identity rotation)
                 nn.init.normal_(self.pose_mu.weight, mean=0.0, std=0.01)
@@ -256,13 +301,11 @@ class AffinityVAE(nn.Module):
                 nn.init.constant_(self.pose_log_var.weight, 0.0)
                 nn.init.constant_(self.pose_log_var.bias, -3.0)  # exp(-3) ≈ 0.05 initial std
         else:
-            self.pose = nn.Linear(flat_shape, pose_channels)
-            # Initialize deterministic pose close to zero as well
-            with torch.no_grad():
-                nn.init.normal_(self.pose.weight, mean=0.0, std=0.01)
-                nn.init.zeros_(self.pose.bias)
+            if hasattr(self, 'pose'):
+                with torch.no_grad():
+                    nn.init.normal_(self.pose.weight, mean=0.0, std=0.01)
+                    nn.init.zeros_(self.pose.bias)
             
-        self.global_weight = nn.Linear(flat_shape, 1)
         self.use_rotated_affinity = use_rotated_affinity
         self.crossover_probability = crossover_probability
 
