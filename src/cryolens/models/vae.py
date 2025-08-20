@@ -15,6 +15,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+from .encoders import DualStreamSeparator
+
 
 def fallback_to_cpu(method):
     """
@@ -235,13 +237,24 @@ class AffinityVAE(nn.Module):
 
         flat_shape = self.encoder.flat_shape
 
-        self.mu = nn.Linear(flat_shape, latent_dims)
-        self.log_var = nn.Linear(flat_shape, latent_dims)
+        # Use DualStreamSeparator to separate content and pose features
+        # The separator outputs intermediate features that are then projected to final dimensions
+        # We use 2*latent_dims for content intermediate and 2*pose_channels for pose intermediate
+        self.dual_stream_separator = DualStreamSeparator(
+            input_dim=flat_shape,
+            content_dim=2 * latent_dims,  # Intermediate content features
+            pose_dim=2 * max(pose_channels, 4)  # Intermediate pose features (at least 8 dims)
+        )
         
-        # MODIFIED: Add pose variance head if variational
+        # Content stream projections (from intermediate to final)
+        self.mu = nn.Linear(2 * latent_dims, latent_dims)
+        self.log_var = nn.Linear(2 * latent_dims, latent_dims)
+        
+        # Pose stream projections (from intermediate to final)
+        pose_intermediate_dim = 2 * max(pose_channels, 4)
         if use_variational_pose:
-            self.pose_mu = nn.Linear(flat_shape, pose_channels)
-            self.pose_log_var = nn.Linear(flat_shape, pose_channels)
+            self.pose_mu = nn.Linear(pose_intermediate_dim, pose_channels)
+            self.pose_log_var = nn.Linear(pose_intermediate_dim, pose_channels)
             
             # Initialize pose networks with small values to start near identity rotation
             with torch.no_grad():
@@ -253,13 +266,14 @@ class AffinityVAE(nn.Module):
                 nn.init.constant_(self.pose_log_var.weight, 0.0)
                 nn.init.constant_(self.pose_log_var.bias, -3.0)  # exp(-3) ≈ 0.05 initial std
         else:
-            self.pose = nn.Linear(flat_shape, pose_channels)
+            self.pose = nn.Linear(pose_intermediate_dim, pose_channels)
             # Initialize deterministic pose close to zero as well
             with torch.no_grad():
                 nn.init.normal_(self.pose.weight, mean=0.0, std=0.01)
                 nn.init.zeros_(self.pose.bias)
-            
-        self.global_weight = nn.Linear(flat_shape, 1)
+        
+        # Global weight projection (from pose stream since it's pose-related)
+        self.global_weight = nn.Linear(pose_intermediate_dim, 1)
         self.use_rotated_affinity = use_rotated_affinity
         self.crossover_probability = crossover_probability
 
@@ -331,11 +345,13 @@ class AffinityVAE(nn.Module):
         # Ensure all components are on the same device as input
         if self.use_variational_pose:
             # When using variational pose, we have pose_mu and pose_log_var
-            device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, 
+            device = self._ensure_same_device(x, self.encoder, self.decoder, self.dual_stream_separator,
+                                             self.mu, self.log_var, 
                                              self.pose_mu, self.pose_log_var, self.global_weight)
         else:
             # When using deterministic pose, we have pose
-            device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, 
+            device = self._ensure_same_device(x, self.encoder, self.decoder, self.dual_stream_separator,
+                                             self.mu, self.log_var, 
                                              self.pose, self.global_weight)
         rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         
@@ -549,29 +565,31 @@ class AffinityVAE(nn.Module):
         """
         # Ensure components are on same device
         if self.use_variational_pose:
-            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+            self._ensure_same_device(x, self.encoder, self.dual_stream_separator,
+                                   self.mu, self.log_var, 
                                    self.pose_mu, self.pose_log_var, self.global_weight)
         else:
-            self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+            self._ensure_same_device(x, self.encoder, self.dual_stream_separator,
+                                   self.mu, self.log_var, 
                                    self.pose, self.global_weight)
         
+        # Get encoder features
         encoded = self.encoder(x)
-        mu = self.mu(encoded)
-        log_var = self.log_var(encoded)
         
-        # MODIFIED: Handle variational pose
+        # Separate into content and pose streams using DualStreamSeparator
+        content_features, pose_features = self.dual_stream_separator(encoded)
+        
+        # Process content stream to get latent distribution
+        mu = self.mu(content_features)
+        log_var = self.log_var(content_features)
+        
+        # Process pose stream
         if self.use_variational_pose:
-            pose_mu = self.pose_mu(encoded)
-            pose_log_var = self.pose_log_var(encoded)
+            pose_mu = self.pose_mu(pose_features)
+            pose_log_var = self.pose_log_var(pose_features)
             
-            # CRITICAL FIX: Bound the angle mean to reasonable range before sampling
-            if self.pose_channels == 4:
-                # Apply tanh to angle component and scale to [-pi, pi]
-                angle_mu = torch.tanh(pose_mu[:, 0:1]) * np.pi
-                pose_mu = torch.cat([angle_mu, pose_mu[:, 1:4]], dim=1)
-            elif self.pose_channels == 1:
-                # For 1D rotation, bound to [-pi, pi]
-                pose_mu = torch.tanh(pose_mu) * np.pi
+            # NO BOUNDING: Let the network learn the appropriate range
+            # The pose regularization and supervision will guide it
             
             # Sample pose
             pose = self.reparameterize_pose(pose_mu, pose_log_var)
@@ -599,20 +617,20 @@ class AffinityVAE(nn.Module):
                                 print(f"  angle mean: {angle.mean().item():.4f}, std: {angle.std().item():.4f}")
                                 print(f"  axis norm mean: {axis_norm.mean().item():.4f}, std: {axis_norm.std().item():.4f}")
         else:
-            pose = self.pose(encoded)
-            # CRITICAL FIX: Bound the angle to reasonable range
+            pose = self.pose(pose_features)
+            # NO BOUNDING: Remove tanh clipping to let network learn natural range
+            # Just normalize axis for quaternion representation if needed
             if self.pose_channels == 4:
-                # Apply tanh to angle and scale to [-pi, pi]
-                angle = torch.tanh(pose[:, 0:1]) * np.pi
+                # Extract angle and axis
+                angle = pose[:, 0:1]
                 axis = pose[:, 1:4]
                 # Normalize axis to unit vector
                 axis = F.normalize(axis, p=2, dim=1, eps=1e-6)
                 pose = torch.cat([angle, axis], dim=1)
-            elif self.pose_channels == 1:
-                # For 1D rotation, bound to [-pi, pi]
-                pose = torch.tanh(pose) * np.pi
+            # For 1D rotation, no processing needed - let it be unbounded
             
-        global_weight = self.global_weight(encoded)
+        # Global weight from pose stream (since it's pose-related)
+        global_weight = self.global_weight(pose_features)
         
         # CRITICAL FIX: Force L2 normalization during evaluation only
         # This ensures consistent similarity calculations during inference

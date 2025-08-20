@@ -3,9 +3,68 @@
 """
 
 import torch
+import torch.nn as nn
 import numpy as np
 import logging
 from typing import Tuple, List, Optional, Union
+
+class DualStreamSeparator(nn.Module):
+    """Separates encoded features into content and pose streams.
+    
+    The content stream includes more regularization to encourage invariance,
+    while the pose stream has less regularization to preserve pose information.
+    """
+    
+    def __init__(self, input_dim: int, content_dim: int, pose_dim: int):
+        """Initialize the dual stream separator.
+        
+        Parameters
+        ----------
+        input_dim : int
+            Dimension of the input features from the encoder
+        content_dim : int
+            Dimension of the content features (for molecular identity)
+        pose_dim : int
+            Dimension of the pose features (for rotation/orientation)
+        """
+        super().__init__()
+        
+        # Content stream: more regularization for invariance
+        self.content_stream = nn.Sequential(
+            nn.Linear(input_dim, input_dim // 2),
+            nn.BatchNorm1d(input_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.2),  # Higher dropout for invariance
+            nn.Linear(input_dim // 2, content_dim)
+        )
+        
+        # Pose stream: less regularization to preserve pose info
+        self.pose_stream = nn.Sequential(
+            nn.Linear(input_dim, input_dim // 2),
+            nn.BatchNorm1d(input_dim // 2),
+            nn.ReLU(),
+            nn.Linear(input_dim // 2, pose_dim)
+        )
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through both streams.
+        
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input features of shape (batch_size, input_dim)
+            
+        Returns
+        -------
+        content_features : torch.Tensor
+            Content features of shape (batch_size, content_dim)
+        pose_features : torch.Tensor
+            Pose features of shape (batch_size, pose_dim)
+        """
+        content_features = self.content_stream(x)
+        pose_features = self.pose_stream(x)
+        return content_features, pose_features
+
 
 def dims_after_pooling(start: int, n_pools: int) -> int:
     """Calculate the size of a layer after n pooling ops.
