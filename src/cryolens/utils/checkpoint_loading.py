@@ -536,4 +536,27 @@ def load_checkpoint_safe(
     if load_optimizer and 'optimizer_state_dict' in checkpoint:
         result['optimizer_state_dict'] = checkpoint['optimizer_state_dict']
     
-    return result
+
+
+# Keep the original load_checkpoint function for backward compatibility
+def load_checkpoint(
+    checkpoint_path: str, 
+    config_path: Optional[str] = None, 
+    device: Optional[torch.device] = None
+) -> Tuple[AffinityVAE, Dict[str, Any]]:
+    """
+    Load model from a checkpoint with proper configuration.
+    
+    This is the original function kept for backward compatibility.
+    Consider using load_vae_model() for more features.
+    """
+    # Use the new enhanced loading function
+    if config_path:
+        # Load config explicitly if provided
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        vae, _ = load_vae_model(checkpoint_path, device, load_config=False)
+        vae._config = config
+        return vae, config
+    else:
+        return load_vae_model(checkpoint_path, device)
