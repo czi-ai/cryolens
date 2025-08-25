@@ -395,7 +395,7 @@ def load_vae_model(
         decoder=decoder,
         latent_dims=config['latent_dims'],
         pose_channels=config.get('pose_dims', 4),
-        use_rotated_affinity=config.get('use_rotated_affinity', False),
+        # Note: use_rotated_affinity was removed from AffinityVAE
     )
     
     # Load weights
