@@ -184,23 +184,45 @@ def load_vae_model(
     create_dummy_classes()
     
     # Load checkpoint with fallback for various formats
+    # First, try with Lightning Fabric safe globals if available
+    checkpoint_state = None
+    
     try:
-        checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    except Exception:
-        import pickle
-        old_find_class = pickle.Unpickler.find_class
-        
-        def permissive_find_class(self, module, name):
-            try:
-                return old_find_class(self, module, name)
-            except (ImportError, AttributeError):
-                return type(name, (), {})
-        
-        pickle.Unpickler.find_class = permissive_find_class
+        # Try with safe globals for Lightning Fabric
+        import torch.serialization
         try:
+            import lightning_fabric.utilities.data
+            with torch.serialization.safe_globals([lightning_fabric.utilities.data.AttributeDict]):
+                checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+                logger.debug("Loaded checkpoint with Lightning Fabric safe globals")
+        except ImportError:
+            pass
+    except Exception:
+        pass
+    
+    if checkpoint_state is None:
+        try:
+            # Try standard loading with weights_only=False
             checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        finally:
-            pickle.Unpickler.find_class = old_find_class
+            logger.debug("Loaded checkpoint with weights_only=False")
+        except Exception as e:
+            # Last resort - create custom unpickler
+            import pickle
+            import io
+            
+            class FlexibleUnpickler(pickle.Unpickler):
+                def find_class(self, module, name):
+                    try:
+                        return super().find_class(module, name)
+                    except (ImportError, AttributeError, ModuleNotFoundError):
+                        # Create dummy class for missing classes
+                        logger.warning(f"Creating dummy class for missing: {module}.{name}")
+                        return type(name, (), {})
+            
+            # Read file and use custom unpickler
+            with open(checkpoint_path, 'rb') as f:
+                checkpoint_state = FlexibleUnpickler(f).load()
+            logger.debug("Loaded checkpoint with custom unpickler")
     
     # Extract state dict
     if 'state_dict' in checkpoint_state:
