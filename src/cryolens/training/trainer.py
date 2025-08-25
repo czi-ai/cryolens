@@ -412,14 +412,12 @@ def create_trainer(
         print(f"Rank {rank}:{local_rank}: Configuring distributed training with {dist_config.world_size} processes")
         print(f"Rank {rank}:{local_rank}: Distributed config - world_size: {dist_config.world_size}, num_nodes: {dist_config.num_nodes}, devices_per_node: {dist_config.devices_per_node}")
         
-        # CRITICAL FIX: Properly configure devices and num_nodes for PyTorch Lightning
         if trainer_kwargs['accelerator'] == 'gpu':
             device_count = torch.cuda.device_count()
             
             # Set devices per node (this is what Lightning expects)
             trainer_kwargs['devices'] = dist_config.devices_per_node
             
-            # CRITICAL: num_nodes must match the actual number of nodes
             trainer_kwargs['num_nodes'] = dist_config.num_nodes
             
             print(f"Rank {rank}:{local_rank}: Lightning config - devices per node: {trainer_kwargs['devices']}, num_nodes: {trainer_kwargs['num_nodes']}")
