@@ -200,27 +200,43 @@ def load_vae_model(
         except Exception as e2:
             logger.debug(f"CPU loading with weights_only=False failed: {e2}")
             
-            # Strategy 3: Custom unpickler with proper persistent ID handling
+            # Strategy 3: Custom loading with permissive unpickler
             import pickle
+            import io
             
-            # Store and override the find_class method to handle missing modules
-            old_find_class = pickle.Unpickler.find_class
+            # Create a custom unpickler class
+            class PermissiveUnpickler(pickle.Unpickler):
+                def find_class(self, module, name):
+                    try:
+                        return super().find_class(module, name)
+                    except (ImportError, AttributeError, ModuleNotFoundError):
+                        logger.warning(f"Creating dummy class for {module}.{name}")
+                        return type(name, (), {})
             
-            def permissive_find_class(self, module, name):
+            # Custom torch.load function using our unpickler
+            def custom_torch_load(path):
+                # This is based on how torch.load works internally
+                import torch._utils
+                
+                # Save original unpickler
+                original_unpickler = pickle.Unpickler
+                
                 try:
-                    return old_find_class(self, module, name)
-                except (ImportError, AttributeError, ModuleNotFoundError):
-                    logger.warning(f"Creating dummy class for {module}.{name}")
-                    return type(name, (), {})
-            
-            # Temporarily override find_class
-            pickle.Unpickler.find_class = permissive_find_class
+                    # Monkey-patch pickle module
+                    pickle.Unpickler = PermissiveUnpickler
+                    
+                    # Now use torch.load which will use our custom unpickler
+                    result = torch.load(path, map_location='cpu', weights_only=False)
+                    return result
+                finally:
+                    # Restore original unpickler
+                    pickle.Unpickler = original_unpickler
             
             try:
-                checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                checkpoint_state = custom_torch_load(checkpoint_path)
                 logger.debug("Loaded checkpoint with permissive unpickler")
             except Exception as e3:
-                logger.debug(f"Permissive unpickler failed: {e3}")
+                logger.debug(f"Custom loading failed: {e3}")
                 
                 # Strategy 4: Try with weights_only=True as last resort (may lose some data)
                 try:
@@ -229,9 +245,6 @@ def load_vae_model(
                 except Exception as e4:
                     logger.error(f"All loading strategies failed. Last error: {e4}")
                     raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}")
-            finally:
-                # Restore original find_class
-                pickle.Unpickler.find_class = old_find_class
     
     if checkpoint_state is None:
         raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}")
