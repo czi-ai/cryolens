@@ -50,6 +50,7 @@ def create_dummy_classes():
     # Add to multiple namespaces to ensure they're found
     import builtins
     import __main__
+    import types
     
     # Add to builtins
     builtins.CurriculumScheduler = CurriculumScheduler
@@ -74,36 +75,54 @@ def create_dummy_classes():
     sys.modules['CurriculumScheduler'] = CurriculumScheduler
     sys.modules['TrainingConfig'] = TrainingConfig
     
-    # Add to cryolens.training.losses namespace
-    try:
-        from cryolens.training import losses
-        setattr(losses, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
-    except ImportError:
-        # Create the module structure if it doesn't exist
-        import types
+    # Create complete module structure for cryolens.training.losses and cryolens.training.distributed
+    # This handles cases where the checkpoint expects these modules
+    
+    # Ensure cryolens exists
+    if 'cryolens' not in sys.modules:
+        cryolens_module = types.ModuleType('cryolens')
+        sys.modules['cryolens'] = cryolens_module
+    else:
+        cryolens_module = sys.modules['cryolens']
+    
+    # Create cryolens.training as a package (module with submodules)
+    if 'cryolens.training' not in sys.modules:
+        training_module = types.ModuleType('cryolens.training')
+        training_module.__path__ = []  # Make it a package
+        sys.modules['cryolens.training'] = training_module
+        setattr(cryolens_module, 'training', training_module)
+    else:
+        training_module = sys.modules['cryolens.training']
+        if not hasattr(training_module, '__path__'):
+            training_module.__path__ = []  # Make it a package if it isn't
+    
+    # Create cryolens.training.losses
+    if 'cryolens.training.losses' not in sys.modules:
+        losses_module = types.ModuleType('cryolens.training.losses')
+        losses_module.__path__ = []  # Make it a package
+        sys.modules['cryolens.training.losses'] = losses_module
+        setattr(training_module, 'losses', losses_module)
+    else:
+        losses_module = sys.modules['cryolens.training.losses']
+    
+    # Add the loss class to the losses module
+    setattr(losses_module, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
+    
+    # Create cryolens.training.distributed
+    if 'cryolens.training.distributed' not in sys.modules:
+        distributed_module = types.ModuleType('cryolens.training.distributed')
+        distributed_module.__path__ = []  # Make it a package
+        sys.modules['cryolens.training.distributed'] = distributed_module
+        setattr(training_module, 'distributed', distributed_module)
         
-        # Create cryolens.training.losses module if needed
-        if 'cryolens' not in sys.modules:
-            cryolens_module = types.ModuleType('cryolens')
-            sys.modules['cryolens'] = cryolens_module
-        else:
-            cryolens_module = sys.modules['cryolens']
+        # Add common distributed training utilities as dummies
+        class DummyDistributedTrainer:
+            def __init__(self, *args, **kwargs):
+                pass
         
-        if not hasattr(cryolens_module, 'training'):
-            training_module = types.ModuleType('cryolens.training')
-            sys.modules['cryolens.training'] = training_module
-            setattr(cryolens_module, 'training', training_module)
-        else:
-            training_module = cryolens_module.training
-        
-        if 'cryolens.training.losses' not in sys.modules:
-            losses_module = types.ModuleType('cryolens.training.losses')
-            sys.modules['cryolens.training.losses'] = losses_module
-            setattr(training_module, 'losses', losses_module)
-        else:
-            losses_module = sys.modules['cryolens.training.losses']
-        
-        setattr(losses_module, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
+        setattr(distributed_module, 'DistributedTrainer', DummyDistributedTrainer)
+        setattr(distributed_module, 'setup_distributed', lambda: None)
+        setattr(distributed_module, 'cleanup_distributed', lambda: None)
 
 
 def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
