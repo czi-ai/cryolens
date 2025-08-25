@@ -43,7 +43,7 @@ logger = logging.getLogger("cryolens.server")
 from cryolens.utils.checkpoint_loading import load_vae_model
 from cryolens.utils.normalization import normalize_volume, denormalize_volume, get_volume_statistics
 from cryolens.inference import InferencePipeline, create_inference_pipeline
-from cryolens.splats import extract_gaussian_splats, get_splat_parameters
+from cryolens.splats import extract_gaussian_splats
 
 
 # Pydantic models for request/response
