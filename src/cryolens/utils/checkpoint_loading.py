@@ -38,6 +38,14 @@ def create_dummy_classes():
         @property
         def TrainingConfig(self):
             return TrainingConfig
+    
+    class AdaptiveContrastiveAffinityLoss:
+        """Dummy class for removed loss function."""
+        def __init__(self, *args, **kwargs):
+            pass
+        
+        def forward(self, *args, **kwargs):
+            return 0.0
 
     # Add to multiple namespaces to ensure they're found
     import builtins
@@ -46,22 +54,56 @@ def create_dummy_classes():
     # Add to builtins
     builtins.CurriculumScheduler = CurriculumScheduler
     builtins.TrainingConfig = TrainingConfig
+    builtins.AdaptiveContrastiveAffinityLoss = AdaptiveContrastiveAffinityLoss
     
     # Add to __main__ module (where the script runs)
     setattr(__main__, 'CurriculumScheduler', CurriculumScheduler)
     setattr(__main__, 'TrainingConfig', TrainingConfig)
     setattr(__main__, 'tomotwin', DummyTomotwin())
+    setattr(__main__, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
     
     # Add to current module
     current_module = sys.modules[__name__]
     setattr(current_module, 'CurriculumScheduler', CurriculumScheduler)
     setattr(current_module, 'TrainingConfig', TrainingConfig)
     setattr(current_module, 'tomotwin', DummyTomotwin())
+    setattr(current_module, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
     
     # Also register as a module
     sys.modules['tomotwin'] = DummyTomotwin()
     sys.modules['CurriculumScheduler'] = CurriculumScheduler
     sys.modules['TrainingConfig'] = TrainingConfig
+    
+    # Add to cryolens.training.losses namespace
+    try:
+        from cryolens.training import losses
+        setattr(losses, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
+    except ImportError:
+        # Create the module structure if it doesn't exist
+        import types
+        
+        # Create cryolens.training.losses module if needed
+        if 'cryolens' not in sys.modules:
+            cryolens_module = types.ModuleType('cryolens')
+            sys.modules['cryolens'] = cryolens_module
+        else:
+            cryolens_module = sys.modules['cryolens']
+        
+        if not hasattr(cryolens_module, 'training'):
+            training_module = types.ModuleType('cryolens.training')
+            sys.modules['cryolens.training'] = training_module
+            setattr(cryolens_module, 'training', training_module)
+        else:
+            training_module = cryolens_module.training
+        
+        if 'cryolens.training.losses' not in sys.modules:
+            losses_module = types.ModuleType('cryolens.training.losses')
+            sys.modules['cryolens.training.losses'] = losses_module
+            setattr(training_module, 'losses', losses_module)
+        else:
+            losses_module = sys.modules['cryolens.training.losses']
+        
+        setattr(losses_module, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
 
 
 def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
