@@ -186,59 +186,52 @@ def load_vae_model(
     # Load checkpoint - try multiple strategies
     checkpoint_state = None
     
-    # Strategy 1: Try standard PyTorch loading
+    # Strategy 1: Try standard PyTorch loading with weights_only=False (needed for some checkpoints)
     try:
-        checkpoint_state = torch.load(checkpoint_path, map_location=device)
-        logger.debug("Loaded checkpoint with standard torch.load")
+        checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        logger.debug("Loaded checkpoint with standard torch.load (weights_only=False)")
     except Exception as e1:
         logger.debug(f"Standard loading failed: {e1}")
         
-        # Strategy 2: Try with map_location as string
+        # Strategy 2: Try with CPU loading and weights_only=False
         try:
-            checkpoint_state = torch.load(checkpoint_path, map_location=str(device))
-            logger.debug("Loaded checkpoint with string map_location")
+            checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+            logger.debug("Loaded checkpoint to CPU (weights_only=False)")
         except Exception as e2:
-            logger.debug(f"String map_location failed: {e2}")
+            logger.debug(f"CPU loading with weights_only=False failed: {e2}")
             
-            # Strategy 3: Load to CPU first then move
-            try:
-                checkpoint_state = torch.load(checkpoint_path, map_location='cpu')
-                logger.debug("Loaded checkpoint to CPU")
-            except Exception as e3:
-                logger.debug(f"CPU loading failed: {e3}")
-                
-                # Strategy 4: Custom unpickler as last resort
-                import pickle
-                import io
-                
-                class CustomUnpickler(pickle.Unpickler):
-                    def find_class(self, module, name):
-                        try:
-                            return super().find_class(module, name)
-                        except:
-                            logger.warning(f"Creating dummy for {module}.{name}")
-                            return type(name, (), {})
-                    
-                    def persistent_load(self, pid):
-                        # Handle persistent ID loading
-                        if isinstance(pid, tuple):
-                            return pid
-                        return str(pid) if pid is not None else None
-                
+            # Strategy 3: Custom unpickler with proper persistent ID handling
+            import pickle
+            
+            # Store and override the find_class method to handle missing modules
+            old_find_class = pickle.Unpickler.find_class
+            
+            def permissive_find_class(self, module, name):
                 try:
-                    # Read the file and handle as bytes
-                    with open(checkpoint_path, 'rb') as f:
-                        buffer = io.BytesIO(f.read())
-                    
-                    # Try torch.load with custom unpickler
-                    checkpoint_state = torch.load(buffer, map_location='cpu')
-                    logger.debug("Loaded checkpoint with buffer and CPU")
-                except:
-                    # Final fallback - load raw pickle
-                    with open(checkpoint_path, 'rb') as f:
-                        unpickler = CustomUnpickler(f)
-                        checkpoint_state = unpickler.load()
-                    logger.debug("Loaded checkpoint with custom unpickler")
+                    return old_find_class(self, module, name)
+                except (ImportError, AttributeError, ModuleNotFoundError):
+                    logger.warning(f"Creating dummy class for {module}.{name}")
+                    return type(name, (), {})
+            
+            # Temporarily override find_class
+            pickle.Unpickler.find_class = permissive_find_class
+            
+            try:
+                checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                logger.debug("Loaded checkpoint with permissive unpickler")
+            except Exception as e3:
+                logger.debug(f"Permissive unpickler failed: {e3}")
+                
+                # Strategy 4: Try with weights_only=True as last resort (may lose some data)
+                try:
+                    checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+                    logger.warning("Loaded checkpoint with weights_only=True - some metadata may be missing")
+                except Exception as e4:
+                    logger.error(f"All loading strategies failed. Last error: {e4}")
+                    raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}")
+            finally:
+                # Restore original find_class
+                pickle.Unpickler.find_class = old_find_class
     
     if checkpoint_state is None:
         raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}")
