@@ -148,16 +148,21 @@ def create_dummy_classes():
         sys.modules['pathlib._local'] = pathlib_local
         
         # Add common pathlib classes in case they're needed
-        from pathlib import Path
+        from pathlib import Path, PosixPath, PurePath, PurePosixPath
         setattr(pathlib_local, 'Path', Path)
-        setattr(pathlib_local, 'PurePath', Path)
+        setattr(pathlib_local, 'PosixPath', PosixPath)
+        setattr(pathlib_local, 'PurePath', PurePath)
+        setattr(pathlib_local, 'PurePosixPath', PurePosixPath)
     
     # Also ensure pathlib itself isn't being treated as a package
     import pathlib
     if not hasattr(pathlib, '_local'):
         pathlib._local = types.ModuleType('pathlib._local')
-        from pathlib import Path
+        from pathlib import Path, PosixPath, PurePath, PurePosixPath
         pathlib._local.Path = Path
+        pathlib._local.PosixPath = PosixPath
+        pathlib._local.PurePath = PurePath
+        pathlib._local.PurePosixPath = PurePosixPath
 
 
 def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
