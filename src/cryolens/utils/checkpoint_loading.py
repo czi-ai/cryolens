@@ -342,13 +342,38 @@ def load_vae_model(
     else:
         state_dict = checkpoint_state
     
-    # Load or infer configuration
-    config = None
-    if load_config:
-        config = load_training_parameters(checkpoint_path)
+    # Start with default configuration
+    config = {
+        'box_size': 48,  # Default
+        'latent_dims': 16,
+        'num_splats': 768,
+        'latent_ratio': 0.75,
+        'splat_sigma_range': (0.005, 0.1),
+        'pose_dims': 4,
+        'use_rotated_affinity': False,
+        'normalization': 'z-score'
+    }
     
-    if config is None:
-        config = infer_config_from_checkpoint(state_dict, checkpoint_path)
+    # Load or infer configuration
+    if load_config:
+        loaded_params = load_training_parameters(checkpoint_path)
+        if loaded_params:
+            # Update config with loaded parameters, keeping defaults for missing keys
+            for key in config.keys():
+                if key in loaded_params:
+                    config[key] = loaded_params[key]
+            # Also add any extra parameters from the loaded config
+            for key, value in loaded_params.items():
+                if key not in config:
+                    config[key] = value
+    
+    # Now infer any missing values from the checkpoint
+    inferred_config = infer_config_from_checkpoint(state_dict, checkpoint_path)
+    
+    # Update config with inferred values only if they weren't loaded from file
+    for key, value in inferred_config.items():
+        if key not in config or (loaded_params is None and key in ['latent_dims', 'num_splats', 'latent_ratio']):
+            config[key] = value
     
     # Validate configuration against checkpoint
     if 'mu.bias' in state_dict:
