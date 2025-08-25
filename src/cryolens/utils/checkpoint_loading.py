@@ -508,7 +508,18 @@ def save_checkpoint(
     
     # Add optional components
     if config is not None:
-        checkpoint['config'] = config
+        # Clean config to avoid path objects
+        clean_config = {}
+        for key, value in config.items():
+            # Convert Path objects to strings
+            if hasattr(value, '__fspath__'):  # It's a Path-like object
+                clean_config[key] = str(value)
+            elif isinstance(value, (str, int, float, bool, list, dict, tuple, type(None))):
+                clean_config[key] = value
+            else:
+                # Skip non-serializable objects
+                logger.debug(f"Skipping non-serializable config key: {key} of type {type(value)}")
+        checkpoint['config'] = clean_config
     
     if optimizer_state is not None:
         checkpoint['optimizer_state_dict'] = optimizer_state
@@ -523,12 +534,16 @@ def save_checkpoint(
         # Filter out non-serializable objects from metadata
         safe_metadata = {}
         for key, value in metadata.items():
-            # Only save basic types
-            if isinstance(value, (str, int, float, bool, list, dict, tuple)):
+            # Convert Path objects to strings
+            if hasattr(value, '__fspath__'):  # It's a Path-like object
+                safe_metadata[key] = str(value)
+            elif isinstance(value, (str, int, float, bool, list, dict, tuple, type(None))):
                 safe_metadata[key] = value
             elif hasattr(value, '__dict__'):
                 # Try to save class name for reference
                 safe_metadata[f'{key}_class'] = value.__class__.__name__
+            else:
+                logger.debug(f"Skipping non-serializable metadata key: {key} of type {type(value)}")
         checkpoint['metadata'] = safe_metadata
     
     # Save training objects only if explicitly requested
@@ -545,6 +560,7 @@ def save_checkpoint(
             checkpoint['training_info'] = training_info
     
     # Save with weights_only=False to preserve all information
+    # But we've cleaned it to avoid pickle issues
     torch.save(checkpoint, checkpoint_path)
     logger.info(f"Saved checkpoint to {checkpoint_path}")
 
