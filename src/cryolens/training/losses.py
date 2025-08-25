@@ -41,9 +41,14 @@ class ContrastiveAffinityLoss(nn.Module):
         self.latent_ratio = latent_ratio
         self.margin = margin
         
-        # Background similarity values
+        # Background similarity values (in [0,1] range)
         self.background_sim = 0.2  # Low similarity between background samples
         self.background_other_sim = 0.01  # Very low similarity between background and objects
+        
+        print(f"AffinityCosineLoss initialized:")
+        print(f"  Latent ratio: {self.latent_ratio}")
+        print(f"  Background-background similarity: {self.background_sim}")
+        print(f"  Background-object similarity: {self.background_other_sim}")
 
     def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
         """
@@ -92,10 +97,14 @@ class ContrastiveAffinityLoss(nn.Module):
             features2 = y_pred_partial[c[:, 1], :].contiguous()
             
             # Calculate Euclidean distances between embeddings
-            # Normalize embeddings for more stable distance calculation
-            features1_norm = F.normalize(features1, p=2, dim=1)
-            features2_norm = F.normalize(features2, p=2, dim=1)
-            distances = torch.norm(features1_norm - features2_norm, p=2, dim=1)
+            # Option 1: Use raw embeddings without normalization for true Euclidean distance
+            distances = torch.norm(features1 - features2, p=2, dim=1)
+            
+            # For numerical stability, we can optionally scale distances
+            # This helps prevent gradient explosion/vanishing
+            # Scale factor based on embedding dimension to keep distances in reasonable range
+            scale_factor = 1.0 / np.sqrt(n_dims_to_use)
+            distances = distances * scale_factor
             
             # Handle background pairs
             is_background = (y_true == -1)
@@ -134,6 +143,10 @@ class ContrastiveAffinityLoss(nn.Module):
                     valid_similarities = self.lookup[valid_obj_indices1, valid_obj_indices2]
                     target_similarities[both_obj_mask][valid_indices] = valid_similarities
             
+            # Debug: Check target similarities range
+            if torch.any(target_similarities < 0) or torch.any(target_similarities > 1):
+                print(f"WARNING: Target similarities outside [0,1] range! Min: {target_similarities.min():.4f}, Max: {target_similarities.max():.4f}")
+            
             # Calculate contrastive loss components
             # Similar pairs: S_{ij} * distance²
             similar_term = target_similarities * (distances ** 2)
@@ -144,6 +157,20 @@ class ContrastiveAffinityLoss(nn.Module):
             
             # Combined loss
             losses = similar_term + dissimilar_term
+            
+            # Periodic debug output (every 100 steps)
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 0
+                
+            if self._debug_counter % 100 == 0:
+                print(f"\nContrastive Loss Debug (step {self._debug_counter}):")
+                print(f"  Distances - Min: {distances.min():.4f}, Max: {distances.max():.4f}, Mean: {distances.mean():.4f}")
+                print(f"  Target similarities - Min: {target_similarities.min():.4f}, Max: {target_similarities.max():.4f}, Mean: {target_similarities.mean():.4f}")
+                print(f"  Similar term - Mean: {similar_term.mean():.4f}")
+                print(f"  Dissimilar term - Mean: {dissimilar_term.mean():.4f}")
+                print(f"  Total loss - Mean: {losses.mean():.4f}")
             
             # Return per-sample losses or mean loss
             if per_sample:
@@ -163,6 +190,40 @@ class ContrastiveAffinityLoss(nn.Module):
             # Return gradient-maintaining zero tensor
             zero_tensor = torch.tensor(0.0, device=self.device)
             return zero_tensor.requires_grad_()
+
+
+class NormalizedMSELoss(nn.Module):
+    """MSE loss normalized by the size of the subvolume.
+    
+    This ensures that the loss magnitude is consistent regardless of volume size,
+    making it comparable to other losses and preventing gradient explosion.
+    The normalization divides by the total number of voxels (volume_size^3) to
+    get the mean squared error per voxel, which is scale-invariant.
+    """
+    def __init__(self, volume_size: int):
+        super().__init__()
+        self.volume_size = volume_size
+        self.normalization_factor = volume_size ** 3
+        print(f"NormalizedMSELoss initialized with volume_size={volume_size}, normalization_factor={self.normalization_factor}")
+        
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Compute normalized MSE loss.
+        
+        Args:
+            pred: Predicted volume (B, 1, D, H, W)
+            target: Target volume (B, 1, D, H, W)
+            
+        Returns:
+            Normalized MSE loss
+        """
+        # Compute squared error
+        squared_error = (pred - target) ** 2
+        
+        # Sum over spatial dimensions and normalize by volume size
+        # This gives us the mean squared error per voxel
+        loss = squared_error.sum() / (squared_error.shape[0] * self.normalization_factor)
+        
+        return loss
 
 
 class MissingWedgeLoss(nn.Module):
@@ -300,9 +361,14 @@ class AffinityCosineLoss(nn.Module):
         self.l1loss = nn.L1Loss(reduction="none")  # Use "none" for per-sample loss
         self.latent_ratio = latent_ratio
         
-        # Background similarity values
+        # Background similarity values (in [0,1] range)
         self.background_sim = 0.2  # Low similarity between background samples
         self.background_other_sim = 0.01  # Very low similarity between background and objects
+        
+        print(f"AffinityCosineLoss initialized:")
+        print(f"  Latent ratio: {self.latent_ratio}")
+        print(f"  Background-background similarity: {self.background_sim}")
+        print(f"  Background-object similarity: {self.background_other_sim}")
 
     def forward(self, y_true: torch.Tensor, y_pred: torch.Tensor, per_sample: bool = False) -> torch.Tensor:
         """Compute affinity loss with background handling.
@@ -354,7 +420,11 @@ class AffinityCosineLoss(nn.Module):
             features1_norm = F.normalize(features1, p=2, dim=1)
             features2_norm = F.normalize(features2, p=2, dim=1)
             # Calculate cosine similarity between normalized features
-            latent_similarity = self.cos(features1_norm, features2_norm)
+            cosine_similarity = self.cos(features1_norm, features2_norm)
+            
+            # CRITICAL FIX: Map cosine similarity from [-1,+1] to [0,1] range
+            # to match target similarities from lookup table which are in [0,1]
+            latent_similarity = (cosine_similarity + 1.0) / 2.0
             
             # Handle background pairs
             is_background = (y_true == -1)

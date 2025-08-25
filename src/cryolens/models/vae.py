@@ -12,6 +12,7 @@ import traceback
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def fallback_to_cpu(method):
@@ -217,8 +218,6 @@ class AffinityVAE(nn.Module):
         *,
         latent_dims: int = 8,
         pose_channels: int = 1,
-        use_rotated_affinity: bool = False,
-        crossover_probability: float = 0.5,
     ):
         super().__init__()
 
@@ -231,10 +230,14 @@ class AffinityVAE(nn.Module):
 
         self.mu = nn.Linear(flat_shape, latent_dims)
         self.log_var = nn.Linear(flat_shape, latent_dims)
+        
         self.pose = nn.Linear(flat_shape, pose_channels)
+        # Initialize deterministic pose close to zero
+        with torch.no_grad():
+            nn.init.normal_(self.pose.weight, mean=0.0, std=0.01)
+            nn.init.zeros_(self.pose.bias)
+            
         self.global_weight = nn.Linear(flat_shape, 1)
-        self.use_rotated_affinity = use_rotated_affinity
-        self.crossover_probability = crossover_probability
 
     def _ensure_same_device(self, tensor, *modules):
         """
@@ -258,18 +261,29 @@ class AffinityVAE(nn.Module):
         # Check if any module needs to be moved
         device_mismatch = False
         for module in modules:
-            if next(module.parameters()).device != device:
-                device_mismatch = True
-                break
+            # Skip None modules (for optional components)
+            if module is None:
+                continue
+            if hasattr(module, 'parameters') and callable(module.parameters):
+                # It's a nn.Module with parameters
+                if next(module.parameters(), None) is not None:
+                    if next(module.parameters()).device != device:
+                        device_mismatch = True
+                        break
         
         # If there's a mismatch, move all modules to the tensor's device
         if device_mismatch:
             if rank == 0:
                 print(f"Device mismatch detected. Moving components to {device}")
             for module in modules:
-                module_device = next(module.parameters()).device
-                if module_device != device:
-                    module.to(device)
+                if module is None:
+                    continue
+                if hasattr(module, 'parameters') and callable(module.parameters):
+                    module_params = next(module.parameters(), None)
+                    if module_params is not None:
+                        module_device = module_params.device
+                        if module_device != device:
+                            module.to(device)
         
         return device
 
@@ -290,8 +304,9 @@ class AffinityVAE(nn.Module):
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
             Reconstructed data, latent representation, pose, mean, and log variance
         """
-        # Ensure all components are on the same device as input
-        device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, self.pose)
+        # When using deterministic pose, we have pose
+        device = self._ensure_same_device(x, self.encoder, self.decoder, self.mu, self.log_var, 
+                                            self.pose, self.global_weight)
         rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         
         if rank == 0:
@@ -299,54 +314,14 @@ class AffinityVAE(nn.Module):
         
         start_time = time.time()
         
-        if not self.use_rotated_affinity:
-            # Standard forward pass without rotation
-            mu, log_var, generated_pose, generated_global_weight = self.encode(x)
-            encode_time = time.time() - start_time
-            
-            z_start = time.time()
-            z = self.reparameterize(mu, log_var)
-            reparameterize_time = time.time() - z_start
-            
-        else:
-            # Enhanced forward pass with rotated affinity dimensions
-            original_mu, original_log_var, generated_pose, generated_global_weight = self.encode(x)
-            encode_time = time.time() - start_time
-            
-            # Choose a random 90-degree rotation (excluding 0/360 degrees)
-            with torch.no_grad():
-                k = torch.randint(1, 4, (1,)).item()  # Random integer from 1 to 3
-                rotated_x = torch.rot90(x, k=k, dims=(3, 4))  
-            
-            # Get encoder outputs for rotated input
-            rotated_encoded = self.encoder(rotated_x)
-            rotated_mu = self.mu(rotated_encoded)
-            rotated_log_var = self.log_var(rotated_encoded)
-            
-            # Get the ratio of dimensions used for affinity
-            latent_dims = original_mu.shape[1]
-            affinity_ratio = getattr(self.decoder, 'latent_ratio', 0.75)
-            
-            # Calculate the number of affinity dimensions
-            affinity_dims = int(latent_dims * affinity_ratio)
-            
-            # Create masks for uniform crossover
-            crossover_mask = torch.rand(original_mu.shape[0], affinity_dims, device=device) < self.crossover_probability
-            inverse_mask = ~crossover_mask
-            
-            # Initialize mu and log_var with the original values
-            mu = original_mu.clone()
-            log_var = original_log_var.clone()
-            
-            # Apply crossover mask to the affinity dimensions only
-            mu[:, :affinity_dims] = crossover_mask * rotated_mu[:, :affinity_dims] + inverse_mask * original_mu[:, :affinity_dims]
-            log_var[:, :affinity_dims] = crossover_mask * rotated_log_var[:, :affinity_dims] + inverse_mask * original_log_var[:, :affinity_dims]
-            
-            # Re-sample z using the crossover latent parameters
-            z_start = time.time()
-            z = self.reparameterize(mu, log_var)
-            reparameterize_time = time.time() - z_start
+        # Standard forward pass without rotation
+        mu, log_var, generated_pose, generated_global_weight = self.encode(x)
+        encode_time = time.time() - start_time
         
+        z_start = time.time()
+        z = self.reparameterize(mu, log_var)
+        reparameterize_time = time.time() - z_start
+
         # Use provided pose if available, otherwise use the generated pose
         actual_pose = pose if pose is not None else generated_pose
         actual_global_weight = global_weight if global_weight is not None else generated_global_weight
@@ -401,14 +376,18 @@ class AffinityVAE(nn.Module):
         Returns
         -------
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-            Mean, log variance, and pose.
+            Mean, log variance, pose, and global_weight.
         """
-        self._ensure_same_device(x, self.encoder, self.mu, self.log_var, self.pose, self.global_weight)
+        # Ensure components are on same device
+        self._ensure_same_device(x, self.encoder, self.mu, self.log_var, 
+                                self.pose, self.global_weight)
         
         encoded = self.encoder(x)
         mu = self.mu(encoded)
         log_var = self.log_var(encoded)
+        
         pose = self.pose(encoded)
+            
         global_weight = self.global_weight(encoded)
         
         return mu, log_var, pose, global_weight

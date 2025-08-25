@@ -33,6 +33,8 @@ class CachedParquetDataset(Dataset):
         Process rank in distributed setup.
     world_size : int, optional
         Total number of processes in distributed setup.
+    augment_config : dict, optional
+        Configuration for augmentation parameters.
     """
     
     def __init__(
@@ -44,7 +46,8 @@ class CachedParquetDataset(Dataset):
         augment=True,
         seed=42,
         rank=None,
-        world_size=None
+        world_size=None,
+        augment_config=None
     ):
         # Debug log
         rank_str = f"Rank {rank if rank is not None else 'None'}"
@@ -58,6 +61,17 @@ class CachedParquetDataset(Dataset):
         self.seed = seed
         self.rank = rank
         self.world_size = world_size
+        
+        # Set default augmentation configuration
+        default_augment_config = {
+            'rotation_prob': 0.5,
+            'noise_prob': 0.7,
+            'contrast_prob': 0.7,
+            'noise_std_range': (0.05, 0.2),
+            'contrast_range': (0.7, 1.3),
+            'brightness_range': (-0.1, 0.1)
+        }
+        self.augment_config = {**default_augment_config, **(augment_config or {})}
         
         # Check if file exists
         print(f"{rank_str}: DEADLOCK_DEBUG - Checking if file exists: {self.parquet_path}")
@@ -302,7 +316,14 @@ class CachedParquetDataset(Dataset):
         return normalized
     
     def _augment_volume(self, volume):
-        """Apply random augmentations to volume.
+        """Apply random augmentations to volume suitable for cryo-ET data.
+        
+        For cryo-ET subtomograms:
+        - Rotations are only applied in the xy plane (around z-axis) to preserve
+          the orientation relative to the ice surface
+        - No flips are applied to preserve molecular handedness
+        - Gaussian noise is added to simulate imaging noise
+        - Contrast adjustments simulate varying imaging conditions
         
         Parameters
         ----------
@@ -320,19 +341,32 @@ class CachedParquetDataset(Dataset):
         # Make a contiguous copy to avoid stride issues
         volume = np.ascontiguousarray(volume)
         
-        # Random rotation
-        if np.random.random() > 0.5:
-            k = np.random.randint(1, 4)
-            axes = tuple(np.random.choice([0, 1, 2], size=2, replace=False))
-            volume = np.rot90(volume, k=k, axes=axes)
-            # Ensure contiguous memory layout after rotation
+        # Random rotation only in xy plane (around z-axis)
+        # This preserves the orientation relative to the ice surface
+        if np.random.random() < self.augment_config['rotation_prob']:
+            k = np.random.randint(1, 4)  # 90, 180, or 270 degrees
+            volume = np.rot90(volume, k=k, axes=(0, 1))  # Only rotate in xy plane
             volume = np.ascontiguousarray(volume)
             
-        # Random flips
-        for axis in range(3):
-            if np.random.random() > 0.5:
-                # Always make a copy to avoid negative strides
-                volume = np.ascontiguousarray(np.flip(volume, axis=axis))
+        # Add Gaussian noise to simulate imaging noise
+        if np.random.random() < self.augment_config['noise_prob']:
+            noise_std_min, noise_std_max = self.augment_config['noise_std_range']
+            noise_std = np.random.uniform(noise_std_min, noise_std_max) * np.std(volume)
+            noise = np.random.normal(0, noise_std, volume.shape)
+            volume = volume + noise
+            
+        # Contrast adjustment to simulate varying imaging conditions
+        if np.random.random() < self.augment_config['contrast_prob']:
+            # Random contrast factor
+            contrast_min, contrast_max = self.augment_config['contrast_range']
+            contrast_factor = np.random.uniform(contrast_min, contrast_max)
+            # Random brightness offset
+            brightness_min, brightness_max = self.augment_config['brightness_range']
+            brightness_offset = np.random.uniform(brightness_min, brightness_max) * np.std(volume)
+            
+            # Apply contrast and brightness
+            mean_val = np.mean(volume)
+            volume = contrast_factor * (volume - mean_val) + mean_val + brightness_offset
                 
         return volume
 
@@ -365,6 +399,8 @@ class CurriculumParquetDataset(Dataset):
     normalization: str, optional
         Normalization method to use (default: "z-score").
         Options: "z-score", "min-max", "percentile", "none"
+    augment_config : dict, optional
+        Configuration for augmentation parameters.
     """
     
     def __init__(
@@ -379,8 +415,11 @@ class CurriculumParquetDataset(Dataset):
         seed=42,
         rank=None,
         world_size=None,
-        normalization="z-score"
+        normalization="z-score",
+        augment_config=None
     ):
+        logger.info(f"CurriculumParquetDataset.__init__ starting with {len(parquet_paths)} paths")
+        
         self.parquet_paths = [Path(p) for p in parquet_paths]
         self.name_to_pdb = name_to_pdb or {}
         self.box_size = box_size
@@ -393,10 +432,23 @@ class CurriculumParquetDataset(Dataset):
         self.world_size = world_size
         self.normalization = normalization
         
+        logger.info(f"Setting up augmentation config...")
+        # Set default augmentation configuration
+        default_augment_config = {
+            'rotation_prob': 0,
+            'noise_prob': 0.7,
+            'contrast_prob': 0.7,
+            'noise_std_range': (0.05, 0.2),
+            'contrast_range': (0.7, 1.3),
+            'brightness_range': (-0.1, 0.1)
+        }
+        self.augment_config = {**default_augment_config, **(augment_config or {})}
+        
         # Set current epoch and stage
         self.current_epoch = 0
         self.current_stage = 0
         
+        logger.info(f"Setting random seed...")
         # Set random seed
         if self.rank is not None:
             # Use different seed for each process
@@ -411,8 +463,10 @@ class CurriculumParquetDataset(Dataset):
         self.weights = []
         self.total_items = 0
         
+        logger.info(f"About to load data from {len(self.parquet_paths)} parquet files...")
         # Combine data from all parquet files
         self._load_data()
+        logger.info(f"Data loading completed. Total items: {self.total_items}")
         
         # Make sure we have at least one valid dataset
         if self.total_items == 0:
@@ -425,9 +479,9 @@ class CurriculumParquetDataset(Dataset):
                     print(f"Dataset {i} path: {path}")
         
         # Update weights based on curriculum
-        print(f"Rank {rank if rank is not None else 'None'}: DEADLOCK_DEBUG - Updating dataset weights")
+        logger.info(f"Updating dataset weights...")
         self._update_weights()
-        print(f"Rank {rank if rank is not None else 'None'}: DEADLOCK_DEBUG - CurriculumParquetDataset initialization complete")
+        logger.info(f"CurriculumParquetDataset initialization complete")
     
     def _normalize_volume(self, volume):
         """Normalize the volume based on the selected normalization method.
@@ -480,15 +534,16 @@ class CurriculumParquetDataset(Dataset):
         
     def _load_data(self):
         """Load data from multiple parquet files with validation and apply normalization."""
+        logger.info("Starting _load_data()...")
         try:
             # Load all dataframes
             dataframes = []
             
             for path_idx, path in enumerate(self.parquet_paths):
+                logger.info(f"Loading parquet file {path_idx + 1}/{len(self.parquet_paths)}: {path}")
                 try:
                     df = pd.read_parquet(path)
-                    if self.rank == 0 or self.rank is None:
-                        logging.info(f"Loaded {len(df)} samples from {path}")
+                    logger.info(f"Successfully loaded {len(df)} samples from {path}")
                     
                     # Add source identifier for curriculum sampling
                     source_name = f"source_{path_idx}"
@@ -504,57 +559,26 @@ class CurriculumParquetDataset(Dataset):
                         logging.warning(f"Missing required columns in {path}: {missing_cols}")
                         continue
                     
-                    # Process and normalize each subvolume during loading
-                    def process_and_normalize_subvolume(row):
-                        subvolume = row['subvolume']
-                        shape = row['shape']
-                        
-                        if isinstance(subvolume, bytes):
+                    logger.info(f"Validating subvolumes for file {path_idx + 1}...")
+                    # Validate subvolumes but defer normalization to __getitem__
+                    def validate_subvolume(x):
+                        if isinstance(x, bytes):
                             try:
-                                # Convert from bytes to numpy array
-                                subvolume = np.frombuffer(subvolume, dtype=np.float32).copy()
-                                
-                                # Reshape to original volume shape
-                                subvolume = subvolume.reshape(shape)
-                                
-                                # Apply normalization
-                                subvolume = self._normalize_volume(subvolume)
-                                
-                                # Flatten for storage
-                                return subvolume.flatten()
+                                # Just validate we can read it, don't process it yet
+                                test_array = np.frombuffer(x, dtype=np.float32)
+                                return x  # Keep original bytes
                             except Exception as e:
                                 if self.rank == 0 or self.rank is None:
-                                    logging.warning(f"Error normalizing subvolume: {str(e)}")
+                                    logging.warning(f"Invalid subvolume bytes: {str(e)}")
                                 return None
-                        elif isinstance(subvolume, np.ndarray):
-                            try:
-                                # Reshape if needed
-                                if subvolume.shape != shape:
-                                    subvolume = subvolume.reshape(shape)
-                                
-                                # Apply normalization
-                                subvolume = self._normalize_volume(subvolume)
-                                
-                                # Flatten for storage
-                                return subvolume.flatten()
-                            except Exception as e:
-                                if self.rank == 0 or self.rank is None:
-                                    logging.warning(f"Error normalizing subvolume: {str(e)}")
-                                return None
+                        elif isinstance(x, np.ndarray):
+                            return x  # Keep original array
                         return None
                     
-                    # Apply normalization to all subvolumes
-                    if self.rank == 0 or self.rank is None:
-                        logging.info(f"Normalizing subvolumes with method: {self.normalization}")
-                    
-                    # Process each subvolume 
-                    normalized_subvolumes = []
-                    for i, row in df.iterrows():
-                        normalized = process_and_normalize_subvolume(row)
-                        normalized_subvolumes.append(normalized)
-                    
-                    # Update the dataframe with normalized subvolumes
-                    df['subvolume'] = normalized_subvolumes
+                    logger.info(f"Applying validation to subvolumes...")
+                    # Only validate, don't process all subvolumes at once
+                    df['subvolume'] = df['subvolume'].apply(validate_subvolume)
+                    logger.info(f"Validation completed for file {path_idx + 1}")
                     
                     # Filter out invalid rows
                     valid_mask = df['subvolume'].notna()
@@ -570,33 +594,41 @@ class CurriculumParquetDataset(Dataset):
                     )
                     
                     dataframes.append(df)
+                    logger.info(f"File {path_idx + 1} processed successfully with {len(df)} valid samples")
                     
                 except Exception as e:
-                    if self.rank == 0 or self.rank is None:
-                        logging.error(f"Error loading dataset from {path}: {str(e)}")
+                    logger.error(f"Error loading dataset from {path}: {str(e)}")
+                    traceback.print_exc()
             
+            logger.info(f"Combining {len(dataframes)} dataframes...")
             # Combine all dataframes
             if dataframes:
                 self.df = pd.concat(dataframes, ignore_index=True)
                 self.total_items = len(self.df)
                 
+                logger.info(f"Combined dataframe has {self.total_items} samples")
+                
                 # Initialize molecule mapping
+                logger.info("Initializing molecule mapping...")
                 self._initialize_molecule_mapping()
                 
                 # Log sample distribution
                 if self.rank == 0 or self.rank is None:
                     sample_counts = self.df.groupby(['source_type', 'molecule_id']).size()
                     logging.info(f"Sample distribution: {sample_counts}")
-                    logging.info(f"Successfully normalized {len(self.df)} subvolumes")
+                    logging.info(f"Dataset loaded with {len(self.df)} samples (normalization deferred)")
             else:
                 # Create empty dataframe if no valid data was loaded
                 self.df = pd.DataFrame(columns=['subvolume', 'shape', 'molecule_id', 'source_type', 'sample_id'])
+                self.total_items = 0
                 logging.warning("No valid data was loaded from any of the parquet files")
                 
         except Exception as e:
             logging.error(f"Error loading data on rank {self.rank if self.rank is not None else 0}: {str(e)}")
+            traceback.print_exc()
             # Create empty dataframe as fallback
             self.df = pd.DataFrame(columns=['subvolume', 'shape', 'molecule_id', 'source_type', 'sample_id'])
+            self.total_items = 0
         
     def _initialize_molecule_mapping(self):
         """Create mapping between molecule IDs and indices using PDB IDs."""
@@ -942,9 +974,10 @@ class CurriculumParquetDataset(Dataset):
                 
                 subvolume = subvolume.reshape(snr_data['shape'])
                 
+                # Apply normalization at access time
+                subvolume = self._normalize_volume(subvolume)
+                
                 # No augmentation for visualization samples to ensure consistency
-                # Ensure contiguous memory layout before converting to tensor
-                subvolume = np.ascontiguousarray(subvolume)
                 # Ensure contiguous memory layout before converting to tensor
                 subvolume = np.ascontiguousarray(subvolume)
                 subvolume = np.expand_dims(subvolume, axis=0)
@@ -1018,11 +1051,12 @@ class CurriculumParquetDataset(Dataset):
                 
                 subvolume = subvolume.reshape(snr_data['shape'])
                 
+                # Apply normalization at access time
+                subvolume = self._normalize_volume(subvolume)
+                
                 if self.augment:
                     subvolume = self._augment_volume(subvolume)
                     
-                # Ensure contiguous memory layout before converting to tensor
-                subvolume = np.ascontiguousarray(subvolume)
                 # Ensure contiguous memory layout before converting to tensor
                 subvolume = np.ascontiguousarray(subvolume)
                 subvolume = np.expand_dims(subvolume, axis=0)
@@ -1050,7 +1084,14 @@ class CurriculumParquetDataset(Dataset):
             return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long)
 
     def _augment_volume(self, volume):
-        """Apply data augmentation to 3D volume with multiple transforms.
+        """Apply data augmentation to 3D volume suitable for cryo-ET data.
+        
+        For cryo-ET subtomograms:
+        - Rotations are only applied in the xy plane (around z-axis) to preserve
+          the orientation relative to the ice surface
+        - No flips are applied to preserve molecular handedness
+        - Gaussian noise is added to simulate imaging noise
+        - Contrast adjustments simulate varying imaging conditions
         
         Parameters
         ----------
@@ -1068,18 +1109,31 @@ class CurriculumParquetDataset(Dataset):
         # Make a contiguous copy to avoid stride issues
         volume = np.ascontiguousarray(volume)
         
-        # Random rotation
-        if np.random.random() > 0.5:
-            k = np.random.randint(1, 4)
-            axes = tuple(np.random.choice([0, 1, 2], size=2, replace=False))
-            volume = np.rot90(volume, k=k, axes=axes)
-            # Ensure contiguous memory layout after rotation
+        # Random rotation only in xy plane (around z-axis)
+        # This preserves the orientation relative to the ice surface
+        if np.random.random() < self.augment_config['rotation_prob']:
+            k = np.random.randint(1, 4)  # 90, 180, or 270 degrees
+            volume = np.rot90(volume, k=k, axes=(0, 1))  # Only rotate in xy plane
             volume = np.ascontiguousarray(volume)
             
-        # Random flips
-        for axis in range(3):
-            if np.random.random() > 0.5:
-                # Always use ascontiguousarray instead of copy to ensure positive strides
-                volume = np.ascontiguousarray(np.flip(volume, axis=axis))
+        # Add Gaussian noise to simulate imaging noise
+        if np.random.random() < self.augment_config['noise_prob']:
+            noise_std_min, noise_std_max = self.augment_config['noise_std_range']
+            noise_std = np.random.uniform(noise_std_min, noise_std_max) * np.std(volume)
+            noise = np.random.normal(0, noise_std, volume.shape)
+            volume = volume + noise
+            
+        # Contrast adjustment to simulate varying imaging conditions
+        if np.random.random() < self.augment_config['contrast_prob']:
+            # Random contrast factor
+            contrast_min, contrast_max = self.augment_config['contrast_range']
+            contrast_factor = np.random.uniform(contrast_min, contrast_max)
+            # Random brightness offset
+            brightness_min, brightness_max = self.augment_config['brightness_range']
+            brightness_offset = np.random.uniform(brightness_min, brightness_max) * np.std(volume)
+            
+            # Apply contrast and brightness
+            mean_val = np.mean(volume)
+            volume = contrast_factor * (volume - mean_val) + mean_val + brightness_offset
                 
         return volume

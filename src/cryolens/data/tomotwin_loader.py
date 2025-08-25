@@ -11,11 +11,21 @@ import logging
 import numpy as np
 import pandas as pd
 import random
+import time
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
 
 from cryolens.data.datasets import CachedParquetDataset
+
+# Try to import background generator if available
+try:
+    from cryolens.data.background_generator import BackgroundGenerator, OnlineBackgroundGenerator
+    BACKGROUND_GENERATOR_AVAILABLE = True
+except ImportError:
+    BACKGROUND_GENERATOR_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Background generator not available")
 
 logger = logging.getLogger(__name__)
 
@@ -152,12 +162,15 @@ class StructureDataWrapper(Dataset):
         Name of the structure (PDB ID)
     molecule_to_idx : dict
         Global mapping from molecule names to indices
+    external_molecule_order : list, optional
+        External ordering of molecules to use for consistent indexing
     """
     
-    def __init__(self, dataset, structure_name, molecule_to_idx):
+    def __init__(self, dataset, structure_name, molecule_to_idx, external_molecule_order=None):
         self.dataset = dataset
         self.structure_name = structure_name
         self.molecule_to_idx = molecule_to_idx
+        self.external_molecule_order = external_molecule_order
     
     def __len__(self):
         return len(self.dataset)
@@ -167,8 +180,16 @@ class StructureDataWrapper(Dataset):
         # Get the original item
         volume, _ = self.dataset[idx]
         
-        # Use the global molecule_to_idx mapping for this structure
-        molecule_idx = self.molecule_to_idx.get(self.structure_name, -1)
+        # If external molecule order is provided, use it for indexing
+        if self.external_molecule_order is not None:
+            try:
+                molecule_idx = self.external_molecule_order.index(self.structure_name)
+            except ValueError:
+                # Structure not in external order, use -1 (background)
+                molecule_idx = -1
+        else:
+            # Use the local molecule_to_idx mapping for this structure
+            molecule_idx = self.molecule_to_idx.get(self.structure_name, -1)
         
         return volume, torch.tensor(molecule_idx, dtype=torch.long)
 
@@ -273,7 +294,7 @@ class SingleStructureTomoTwinDataset(Dataset):
             
         # Randomly select one batch file
         selected_batch = random.choice(batch_files)
-        logger.debug(f"Selected batch file {selected_batch.name} for structure {self.structure_name}")
+        logger.info(f"Structure {self.structure_name}: Selected {selected_batch.name} from {selected_snr.name} ({len(batch_files)} available batches)")
         
         # Load the batch file as a dataset
         try:
@@ -312,6 +333,31 @@ class SingleStructureTomoTwinDataset(Dataset):
             return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long)
             
         return self.dataset[idx]
+    
+    def reload_batch(self):
+        """Reload a new random batch file for this structure."""
+        # Add rate limiting to prevent excessive reloading
+        if not hasattr(self, '_last_reload_time'):
+            self._last_reload_time = 0
+        
+        current_time = time.time()
+        min_reload_interval = 30.0  # Minimum 30 seconds between reloads
+        
+        if current_time - self._last_reload_time < min_reload_interval:
+            logger.debug(f"Structure {self.structure_name}: Skipping reload (too soon, last reload {current_time - self._last_reload_time:.1f}s ago)")
+            return
+        
+        logger.info(f"Reloading batch for structure {self.structure_name}")
+        old_dataset = self.dataset
+        self.dataset = self._load_single_batch()
+        self._last_reload_time = current_time
+        
+        if old_dataset is not None and self.dataset is not None:
+            logger.info(f"Structure {self.structure_name}: Reloaded from {len(old_dataset)} to {len(self.dataset)} samples")
+        elif self.dataset is not None:
+            logger.info(f"Structure {self.structure_name}: Loaded {len(self.dataset)} samples on reload")
+        else:
+            logger.warning(f"Structure {self.structure_name}: Failed to reload batch")
 
 
 class TomoTwinDataset(Dataset):
@@ -351,6 +397,12 @@ class TomoTwinDataset(Dataset):
         Maximum number of structures to load per node (default: None, loads all available)
     filtered_structure_ids : list or None
         List of specific structure IDs to load (default: None, loads all available)
+    enable_background : bool
+        Whether to enable background generation (default: False)
+    background_ratio : float
+        Ratio of background samples to include (default: 0.2)
+    background_params : dict or None
+        Parameters for background generator
     """
     
     def __init__(
@@ -367,7 +419,11 @@ class TomoTwinDataset(Dataset):
         samples_per_epoch=2000,
         normalization="z-score",
         max_structures=None,
-        filtered_structure_ids=None
+        filtered_structure_ids=None,
+        external_molecule_order=None,
+        enable_background=False,
+        background_ratio=0.2,
+        background_params=None
     ):
         self.base_dir = Path(base_dir)
         self.name_to_pdb = name_to_pdb or {}
@@ -382,6 +438,23 @@ class TomoTwinDataset(Dataset):
         self.normalization = normalization
         self.max_structures = max_structures
         self.filtered_structure_ids = filtered_structure_ids
+        self.external_molecule_order = external_molecule_order
+        self.enable_background = enable_background
+        self.background_ratio = background_ratio
+        self.background_params = background_params or {}
+        
+        # Initialize background generator if enabled
+        self.background_generator = None
+        if self.enable_background and BACKGROUND_GENERATOR_AVAILABLE:
+            self.background_generator = OnlineBackgroundGenerator(
+                generator_params=self.background_params,
+                cache_size=100  # Cache some backgrounds for efficiency
+            )
+            if rank == 0 or rank is None:
+                logger.info("Background generator initialized with params: {}".format(self.background_params))
+        elif self.enable_background and not BACKGROUND_GENERATOR_AVAILABLE:
+            logger.warning("Background generation requested but generator not available")
+            self.enable_background = False
         
         # Set random seed with distributed awareness
         self._set_random_seed()
@@ -424,7 +497,27 @@ class TomoTwinDataset(Dataset):
             print(f"{rank_str}: Filtered structure IDs: {self.filtered_structure_ids}")
             print(f"{'='*60}\n")
             
-            for pdb_id in self.filtered_structure_ids:
+            # Check if 'background' is in the list
+            has_background = 'background' in self.filtered_structure_ids
+            if has_background:
+                # Enable background generation if 'background' is in PDB codes
+                if not self.enable_background:
+                    self.enable_background = True
+                    if BACKGROUND_GENERATOR_AVAILABLE:
+                        self.background_generator = OnlineBackgroundGenerator(
+                            generator_params=self.background_params,
+                            cache_size=100
+                        )
+                        print(f"{rank_str}: Enabled background generation due to 'background' in PDB codes")
+                    else:
+                        logger.warning("Background requested but generator not available")
+                        
+                # Remove 'background' from the list as it's not a real PDB directory
+                filtered_ids_without_bg = [pid for pid in self.filtered_structure_ids if pid != 'background']
+            else:
+                filtered_ids_without_bg = self.filtered_structure_ids
+            
+            for pdb_id in filtered_ids_without_bg:
                 pdb_dir = self.base_dir / pdb_id
                 if pdb_dir.exists() and pdb_dir.is_dir():
                     structure_dirs[pdb_id] = pdb_dir
@@ -433,7 +526,9 @@ class TomoTwinDataset(Dataset):
                     logger.warning(f"Structure directory {pdb_dir} not found for PDB ID {pdb_id}")
                     print(f"{rank_str}: WARNING - Missing directory for PDB {pdb_id}: {pdb_dir}")
                     
-            print(f"\n{rank_str}: Final structure_dirs after filtering: {list(structure_dirs.keys())}\n")
+            print(f"\n{rank_str}: Final structure_dirs after filtering: {list(structure_dirs.keys())}")
+            if has_background:
+                print(f"{rank_str}: Background generation is enabled")
         else:
             # Original logic: discover all structure directories
             for pdb_dir in self.base_dir.iterdir():
@@ -533,6 +628,15 @@ class TomoTwinDataset(Dataset):
         self.structure_names = valid_structure_names
         self.molecule_to_idx = {name: idx for idx, name in enumerate(sorted(valid_structure_names))}
         
+        # Add background to the mapping if enabled
+        if self.enable_background and self.background_generator:
+            # Background gets a special index (-1 will be used in __getitem__)
+            # But we need to track it for logging and stats
+            self.has_background = True
+            logger.info(f"{log_prefix}: Background generation enabled with ratio {self.background_ratio}")
+        else:
+            self.has_background = False
+        
         # Log all valid structure names being used on this worker
         log_prefix = f"Rank {self.rank if self.rank is not None else 'None'}"
         logger.info(f"{log_prefix}: Using the following {len(valid_structure_names)} structures:")
@@ -542,7 +646,7 @@ class TomoTwinDataset(Dataset):
         wrapped_datasets = []
         for i, dataset in enumerate(structure_datasets):
             struct_name = valid_structure_names[i]
-            wrapped = StructureDataWrapper(dataset, struct_name, self.molecule_to_idx)
+            wrapped = StructureDataWrapper(dataset, struct_name, self.molecule_to_idx, self.external_molecule_order)
             wrapped_datasets.append(wrapped)
             
         # Combine datasets using ConcatDataset or create an empty dataset
@@ -577,6 +681,63 @@ class TomoTwinDataset(Dataset):
         matrix_size = len(self.molecule_to_idx) if hasattr(self, 'molecule_to_idx') else 0
         return f"Loaded {len(self.structure_names)} structures with a total of {self.total_items} samples. Lookup matrix size: {matrix_size}x{matrix_size}"
     
+    def reload_batches(self):
+        """Reload new random batch files for all structures with thread safety."""
+        if not hasattr(self, 'dataset') or self.dataset is None:
+            logger.warning("No dataset to reload")
+            return
+        
+        # Add thread safety to prevent concurrent reloads
+        if not hasattr(self, '_reload_lock'):
+            import threading
+            self._reload_lock = threading.Lock()
+        
+        # Use try_acquire to avoid blocking if another thread is already reloading
+        if not self._reload_lock.acquire(blocking=False):
+            logger.debug(f"Rank {self.rank}: Skipping batch reload - another thread is already reloading")
+            return
+        
+        try:
+            # Rate limiting: don't reload too frequently
+            if not hasattr(self, '_last_global_reload_time'):
+                self._last_global_reload_time = 0
+            
+            import time
+            current_time = time.time()
+            min_global_reload_interval = 60.0  # Minimum 60 seconds between global reloads
+            
+            if current_time - self._last_global_reload_time < min_global_reload_interval:
+                logger.debug(f"Rank {self.rank}: Skipping global reload (too soon, last reload {current_time - self._last_global_reload_time:.1f}s ago)")
+                return
+            
+            logger.info(f"Rank {self.rank}: Reloading batch files for all {len(self.structure_names)} structures")
+            
+            # Reload each structure dataset with additional safety
+            reload_count = 0
+            for i, struct_name in enumerate(self.structure_names):
+                # Find the underlying SingleStructureTomoTwinDataset
+                if hasattr(self.dataset, 'datasets'):
+                    for dataset_wrapper in self.dataset.datasets:
+                        if (hasattr(dataset_wrapper, 'dataset') and 
+                            hasattr(dataset_wrapper.dataset, 'structure_name') and
+                            dataset_wrapper.dataset.structure_name == struct_name):
+                            try:
+                                dataset_wrapper.dataset.reload_batch()
+                                reload_count += 1
+                            except Exception as e:
+                                logger.error(f"Rank {self.rank}: Error reloading {struct_name}: {str(e)}")
+                            break
+            
+            # Update total items count
+            if hasattr(self.dataset, 'datasets'):
+                self.total_items = sum(len(ds) for ds in self.dataset.datasets)
+                logger.info(f"Rank {self.rank}: Reloaded {reload_count}/{len(self.structure_names)} structures - {self.total_items} total samples")
+            
+            self._last_global_reload_time = current_time
+            
+        finally:
+            self._reload_lock.release()
+    
     def __len__(self):
         """Return the dataset size."""
         if self.dataset is None or self.total_items == 0:
@@ -602,9 +763,36 @@ class TomoTwinDataset(Dataset):
                 default_shape = (1, self.box_size, self.box_size, self.box_size)
                 return torch.zeros(default_shape, dtype=torch.float32), torch.tensor(-1, dtype=torch.long)
             
-            # Randomly sample from the dataset
-            real_idx = random.randrange(self.total_items)
-            return self.dataset[real_idx]
+            # Decide whether to return a background sample
+            if self.enable_background and self.background_generator and random.random() < self.background_ratio:
+                # Generate a background sample
+                # First get a random real sample to use as source
+                real_idx = random.randrange(self.total_items)
+                source_volume, _ = self.dataset[real_idx]
+                
+                # Convert to numpy if needed
+                if isinstance(source_volume, torch.Tensor):
+                    source_np = source_volume.numpy()
+                    if source_np.ndim == 4:  # Remove channel dimension
+                        source_np = source_np[0]
+                else:
+                    source_np = source_volume
+                
+                # Generate background
+                background_np = self.background_generator.get_background(source_volume=source_np)
+                
+                # Convert back to tensor format
+                background_np = np.ascontiguousarray(background_np)
+                if background_np.ndim == 3:
+                    background_np = np.expand_dims(background_np, axis=0)
+                background_tensor = torch.from_numpy(background_np).to(dtype=torch.float32)
+                
+                # Return with special background index (-1)
+                return background_tensor, torch.tensor(-1, dtype=torch.long)
+            else:
+                # Randomly sample from the regular dataset
+                real_idx = random.randrange(self.total_items)
+                return self.dataset[real_idx]
             
         except Exception as e:
             logger.error(f"Error in __getitem__: {str(e)}")
@@ -720,7 +908,11 @@ def create_tomotwin_dataloader(
     samples_per_epoch=2000,
     snr_values=None,
     max_structures=None,
-    filtered_structure_ids=None
+    filtered_structure_ids=None,
+    external_molecule_order=None,
+    enable_background=False,
+    background_ratio=0.2,
+    background_params=None
 ):
     """Create a DataLoader for TomoTwin data.
     
@@ -742,6 +934,14 @@ def create_tomotwin_dataloader(
         Maximum number of structures to load per node (default: None, loads all available)
     filtered_structure_ids : list or None
         List of specific structure IDs to load (default: None, loads all available)
+    external_molecule_order : list or None
+        External ordering of molecules for consistent indexing with similarity matrix
+    enable_background : bool
+        Whether to enable background generation
+    background_ratio : float
+        Ratio of background samples to include
+    background_params : dict or None
+        Parameters for background generator
         
     Returns
     -------
@@ -765,7 +965,11 @@ def create_tomotwin_dataloader(
         samples_per_epoch=samples_per_epoch,
         normalization="z-score",
         max_structures=max_structures,
-        filtered_structure_ids=filtered_structure_ids
+        filtered_structure_ids=filtered_structure_ids,
+        external_molecule_order=external_molecule_order,
+        enable_background=enable_background,
+        background_ratio=background_ratio,
+        background_params=background_params
     )
     
     # Print molecular stats
@@ -793,24 +997,36 @@ def create_tomotwin_dataloader(
             seed=171717
         )
     
-    # Use fewer workers to avoid potential deadlocks
-    num_workers = min(16, max(1, os.cpu_count() // (torch.cuda.device_count() * 2 if torch.cuda.is_available() else 2)))
+    # Use fewer workers to avoid potential deadlocks and thread contention
+    # For distributed training stability, use fewer workers per GPU
+    base_workers = max(1, os.cpu_count() // (torch.cuda.device_count() * 4 if torch.cuda.is_available() else 4))
+    if dist_config:
+        # In distributed mode, use even fewer workers to prevent race conditions
+        num_workers = min(4, base_workers)
+    else:
+        num_workers = min(8, base_workers)
+    
+    # For debugging the reload issue, temporarily use 0 workers to eliminate multiprocessing
+    if os.environ.get('CRYOLENS_DEBUG_WORKERS') == '1':
+        num_workers = 0
+        print(f"DEBUG MODE: Using 0 workers to eliminate multiprocessing issues")
     
     if dist_config is None or dist_config.node_rank == 0:
         logger.info(f"Using {num_workers} workers for dataloader with batch size {per_gpu_batch_size}")
     
-    # Create dataloader with distributed settings
+    # Create dataloader with distributed settings and improved stability
     dataloader = DataLoader(
         dataset,
         batch_size=per_gpu_batch_size,
         shuffle=(sampler is None),  # Only shuffle if not using a sampler
         sampler=sampler,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=True if torch.cuda.is_available() else False,
         persistent_workers=(num_workers > 0),
         drop_last=True,
-        prefetch_factor=2 if num_workers > 0 else None,
-        timeout=300  # Shorter timeout to detect hanging workers
+        prefetch_factor=1 if num_workers > 0 else None,  # Reduced from 2 to 1 for stability
+        timeout=600,  # Increased timeout for better stability
+        multiprocessing_context='spawn' if num_workers > 0 else None  # Use spawn for better error isolation
     )
     
     if rank == 0:
