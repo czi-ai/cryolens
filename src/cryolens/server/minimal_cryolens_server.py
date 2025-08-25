@@ -134,6 +134,23 @@ class CryoLensServer:
             logger.error(f"Failed to load model: {str(e)}")
             raise
     
+    def _crop_to_size(self, volume: np.ndarray, target_shape: Tuple[int, ...]) -> np.ndarray:
+        """Crop volume to target shape from center."""
+        if volume.shape == target_shape:
+            return volume
+        
+        # Calculate crop amounts
+        crop_slices = []
+        for actual, target in zip(volume.shape, target_shape):
+            if actual > target:
+                start = (actual - target) // 2
+                end = start + target
+                crop_slices.append(slice(start, end))
+            else:
+                crop_slices.append(slice(None))
+        
+        return volume[tuple(crop_slices)]
+    
     def create_app(self, cors_origins: Optional[List[str]] = None) -> FastAPI:
         """
         Create and configure the FastAPI application.
