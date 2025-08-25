@@ -1,19 +1,29 @@
 """
 Gaussian splat alignment utilities.
 
-This module provides ICP-based alignment algorithms for Gaussian splats.
+This module provides ICP and PCA-based alignment algorithms for Gaussian splats.
 """
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.distance import cdist
-from typing import Tuple, List, Optional, Dict, Any
+from typing import Tuple, List, Optional, Dict, Any, Union
 import logging
+
+# Import PCA-based alignment methods
+from .alignment_pca import (
+    align_gaussian_splats_pca,
+    weighted_pca_alignment,
+    compute_chamfer_distance,
+    compute_alignment_score,
+    compute_structural_metrics,
+    apply_spherical_filter
+)
 
 logger = logging.getLogger(__name__)
 
 
-def align_gaussian_splats(
+def align_gaussian_splats_icp(
     template_splats: Tuple[np.ndarray, np.ndarray, np.ndarray],
     target_splats: Tuple[np.ndarray, np.ndarray, np.ndarray],
     n_iterations: int = 50,
@@ -127,9 +137,46 @@ def align_gaussian_splats(
     return best_rotation, best_error
 
 
+def align_gaussian_splats(
+    template_splats: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    target_splats: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    method: str = 'pca',
+    **kwargs
+) -> Tuple[np.ndarray, float]:
+    """
+    Align target Gaussian splats to template using specified method.
+    
+    Parameters
+    ----------
+    template_splats : Tuple[np.ndarray, np.ndarray, np.ndarray]
+        Template splats (centroids, sigmas, weights)
+    target_splats : Tuple[np.ndarray, np.ndarray, np.ndarray]
+        Target splats to align (centroids, sigmas, weights)
+    method : str
+        Alignment method: 'pca' (default) or 'icp'
+    **kwargs
+        Additional arguments passed to the alignment function
+        
+    Returns
+    -------
+    Tuple[np.ndarray, float]
+        rotation_matrix: 3x3 rotation matrix
+        alignment_error: Final alignment error/score
+    """
+    if method == 'pca':
+        # Use improved PCA-based alignment
+        return align_gaussian_splats_pca(template_splats, target_splats, **kwargs)
+    elif method == 'icp':
+        # Use original ICP implementation
+        return align_gaussian_splats_icp(template_splats, target_splats, **kwargs)
+    else:
+        raise ValueError(f"Unknown alignment method: {method}")
+
+
 def compute_all_alignments(
     all_splats: Tuple[np.ndarray, np.ndarray, np.ndarray],
     template_idx: int = 0,
+    method: str = 'pca',
     **alignment_kwargs
 ) -> Tuple[List[np.ndarray], List[float]]:
     """
@@ -170,7 +217,7 @@ def compute_all_alignments(
         else:
             target_splats = (centroids[i], sigmas[i], weights[i])
             rotation_matrix, error = align_gaussian_splats(
-                template_splats, target_splats, **alignment_kwargs
+                template_splats, target_splats, method=method, **alignment_kwargs
             )
             rotation_matrices.append(rotation_matrix)
             alignment_errors.append(error)
