@@ -287,7 +287,7 @@ class CryoLensServer:
                     input_volume,
                     return_embeddings=request.return_embeddings,
                     return_reconstruction=True,
-                    return_splats=request.return_splat_data
+                    return_splat_params=request.return_splat_data  # Fixed parameter name
                 )
                 
                 # Prepare response
@@ -299,19 +299,72 @@ class CryoLensServer:
                 if request.return_embeddings and 'embeddings' in result:
                     response['embeddings'] = result['embeddings'].tolist()
                 
-                if request.return_splat_data and 'splats' in result:
-                    response['splats'] = {
-                        'centroids': result['splats']['centroids'].tolist(),
-                        'sigmas': result['splats']['sigmas'].tolist(),
-                        'weights': result['splats']['weights'].tolist()
-                    }
+                # Handle splat data extraction manually since _extract_splat_params is not implemented
+                if request.return_splat_data:
+                    # Extract splats using the dedicated function from splats module
+                    try:
+                        centroids, sigmas, weights, _ = extract_gaussian_splats(
+                            self.model,
+                            np.expand_dims(input_volume, axis=0),  # Add batch dimension
+                            self.config,
+                            device=self.device,
+                            batch_size=1
+                        )
+                        response['splats'] = {
+                            'centroids': centroids[0].tolist(),  # Remove batch dimension
+                            'sigmas': sigmas[0].tolist(),
+                            'weights': weights[0].tolist()
+                        }
+                    except Exception as e:
+                        logger.warning(f"Could not extract splat data: {e}")
                 
                 # Handle segmented decoder outputs if available
-                if request.use_segmented_decoder and 'segmented_outputs' in result:
-                    response['segmented_outputs'] = {
-                        'affinity': result['segmented_outputs']['affinity'].tolist(),
-                        'free': result['segmented_outputs']['free'].tolist()
-                    }
+                if request.use_segmented_decoder:
+                    # Check if decoder is segmented
+                    if hasattr(self.model.decoder, 'affinity_centroids'):
+                        # Process with segment visualization
+                        with torch.no_grad():
+                            # Get normalized volume
+                            from cryolens.utils.normalization import normalize_volume
+                            normalized, _ = normalize_volume(
+                                input_volume,
+                                method=self.config.get('normalization', 'z-score'),
+                                return_stats=True
+                            )
+                            volume_tensor = torch.tensor(normalized, dtype=torch.float32)
+                            volume_tensor = volume_tensor.unsqueeze(0).unsqueeze(0).to(self.device)
+                            
+                            # Encode
+                            mu, log_var, pose, global_weight = self.model.encode(volume_tensor)
+                            
+                            # Create identity pose
+                            identity_pose = torch.zeros(1, 4, device=self.device)
+                            identity_pose[:, 0] = 1.0
+                            identity_global_weight = torch.ones(1, 1, device=self.device)
+                            
+                            # Get segmented outputs
+                            segment_outputs = self.model.decoder(
+                                mu, identity_pose, identity_global_weight,
+                                use_final_convolution=request.use_final_convolution,
+                                segment_visualization=True
+                            )
+                            
+                            if isinstance(segment_outputs, tuple) and len(segment_outputs) == 2:
+                                affinity_output, free_output = segment_outputs
+                                
+                                # Crop to input size if needed
+                                affinity_np = affinity_output.cpu().numpy()[0, 0]
+                                free_np = free_output.cpu().numpy()[0, 0]
+                                
+                                if affinity_np.shape != input_volume.shape:
+                                    affinity_np = self._crop_to_size(affinity_np, input_volume.shape)
+                                if free_np.shape != input_volume.shape:
+                                    free_np = self._crop_to_size(free_np, input_volume.shape)
+                                
+                                response['segmented_outputs'] = {
+                                    'affinity': affinity_np.tolist(),
+                                    'free': free_np.tolist()
+                                }
                 
                 return response
                 
