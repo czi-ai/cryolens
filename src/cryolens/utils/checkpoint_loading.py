@@ -183,68 +183,62 @@ def load_vae_model(
     # Create dummy classes for compatibility
     create_dummy_classes()
     
-    # Load checkpoint - try multiple strategies
+    # Load checkpoint - use the approach that works in gaussian_splat_alignment.py
     checkpoint_state = None
     
-    # Strategy 1: Try standard PyTorch loading with weights_only=False (needed for some checkpoints)
+    # First try with weights_only=True to avoid pickle issues
     try:
-        checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        logger.debug("Loaded checkpoint with standard torch.load (weights_only=False)")
+        checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        logger.debug("Loaded checkpoint with weights_only=True")
     except Exception as e1:
-        logger.debug(f"Standard loading failed: {e1}")
+        logger.debug(f"weights_only=True failed: {e1}, trying weights_only=False")
         
-        # Strategy 2: Try with CPU loading and weights_only=False
+        # Try with weights_only=False
         try:
-            checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-            logger.debug("Loaded checkpoint to CPU (weights_only=False)")
+            checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
+            logger.debug("Loaded checkpoint with weights_only=False")
         except Exception as e2:
-            logger.debug(f"CPU loading with weights_only=False failed: {e2}")
+            logger.debug(f"Standard loading failed: {e2}, trying custom unpickler")
             
-            # Strategy 3: Custom loading with permissive unpickler
+            # Use the exact approach from gaussian_splat_alignment.py
             import pickle
-            import io
             
-            # Create a custom unpickler class
-            class PermissiveUnpickler(pickle.Unpickler):
-                def find_class(self, module, name):
-                    try:
-                        return super().find_class(module, name)
-                    except (ImportError, AttributeError, ModuleNotFoundError):
-                        logger.warning(f"Creating dummy class for {module}.{name}")
-                        return type(name, (), {})
-            
-            # Custom torch.load function using our unpickler
-            def custom_torch_load(path):
-                # This is based on how torch.load works internally
-                import torch._utils
-                
-                # Save original unpickler
-                original_unpickler = pickle.Unpickler
-                
-                try:
-                    # Monkey-patch pickle module
-                    pickle.Unpickler = PermissiveUnpickler
-                    
-                    # Now use torch.load which will use our custom unpickler
-                    result = torch.load(path, map_location='cpu', weights_only=False)
-                    return result
-                finally:
-                    # Restore original unpickler
-                    pickle.Unpickler = original_unpickler
+            # Create a permissive unpickler by temporarily modifying pickle behavior
+            old_find_class = None
             
             try:
-                checkpoint_state = custom_torch_load(checkpoint_path)
-                logger.debug("Loaded checkpoint with permissive unpickler")
+                # Check if we can access Unpickler.find_class
+                if hasattr(pickle.Unpickler, 'find_class'):
+                    old_find_class = pickle.Unpickler.find_class
+                    
+                    def permissive_find_class(self, module, name):
+                        try:
+                            return old_find_class(self, module, name)
+                        except (ImportError, AttributeError):
+                            logger.warning(f"Creating dummy class for {module}.{name}")
+                            return type(name, (), {})
+                    
+                    # This might fail on some Python versions, but worth trying
+                    try:
+                        pickle.Unpickler.find_class = permissive_find_class
+                        checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
+                        logger.debug("Loaded checkpoint with modified unpickler")
+                    finally:
+                        if old_find_class:
+                            pickle.Unpickler.find_class = old_find_class
+                else:
+                    # If we can't modify Unpickler, just try loading anyway
+                    checkpoint_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
+                    logger.debug("Loaded checkpoint with standard approach")
+                    
             except Exception as e3:
-                logger.debug(f"Custom loading failed: {e3}")
-                
-                # Strategy 4: Try with weights_only=True as last resort (may lose some data)
+                logger.error(f"All loading attempts failed. Last error: {e3}")
+                # As a final fallback, try loading to CPU
                 try:
-                    checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-                    logger.warning("Loaded checkpoint with weights_only=True - some metadata may be missing")
+                    checkpoint_state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                    logger.warning("Loaded checkpoint to CPU as last resort")
                 except Exception as e4:
-                    logger.error(f"All loading strategies failed. Last error: {e4}")
-                    raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}")
+                    raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}: {e4}")
     
     if checkpoint_state is None:
         raise RuntimeError(f"Failed to load checkpoint from {checkpoint_path}")
