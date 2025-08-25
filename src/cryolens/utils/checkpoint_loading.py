@@ -140,6 +140,24 @@ def create_dummy_classes():
     # Also add to __main__ and builtins for maximum compatibility
     setattr(__main__, 'DistributedConfig', DistributedConfig)
     builtins.DistributedConfig = DistributedConfig
+    
+    # Handle pathlib._local issue
+    # Create a dummy pathlib._local module
+    if 'pathlib._local' not in sys.modules:
+        pathlib_local = types.ModuleType('pathlib._local')
+        sys.modules['pathlib._local'] = pathlib_local
+        
+        # Add common pathlib classes in case they're needed
+        from pathlib import Path
+        setattr(pathlib_local, 'Path', Path)
+        setattr(pathlib_local, 'PurePath', Path)
+    
+    # Also ensure pathlib itself isn't being treated as a package
+    import pathlib
+    if not hasattr(pathlib, '_local'):
+        pathlib._local = types.ModuleType('pathlib._local')
+        from pathlib import Path
+        pathlib._local.Path = Path
 
 
 def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
