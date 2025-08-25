@@ -381,25 +381,159 @@ def load_vae_model(
     return vae, config
 
 
-# Keep the original load_checkpoint function for backward compatibility
-def load_checkpoint(
-    checkpoint_path: str, 
-    config_path: Optional[str] = None, 
-    device: Optional[torch.device] = None
-) -> Tuple[AffinityVAE, Dict[str, Any]]:
+
+
+def save_checkpoint(
+    model: torch.nn.Module,
+    checkpoint_path: str,
+    config: Optional[Dict[str, Any]] = None,
+    optimizer_state: Optional[Dict] = None,
+    epoch: Optional[int] = None,
+    loss: Optional[float] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    save_training_objects: bool = False
+) -> None:
     """
-    Load model from a checkpoint with proper configuration.
+    Save a checkpoint with only essential state to avoid pickle issues.
     
-    This is the original function kept for backward compatibility.
-    Consider using load_vae_model() for more features.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to save
+    checkpoint_path : str
+        Path where to save the checkpoint
+    config : Dict[str, Any], optional
+        Model configuration
+    optimizer_state : Dict, optional
+        Optimizer state dict
+    epoch : int, optional
+        Current epoch
+    loss : float, optional
+        Current loss value
+    metadata : Dict[str, Any], optional
+        Additional metadata to save
+    save_training_objects : bool
+        Whether to save training objects (loss functions, schedulers, etc.)
+        Default False to avoid pickle issues
     """
-    # Use the new enhanced loading function
-    if config_path:
-        # Load config explicitly if provided
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        vae, _ = load_vae_model(checkpoint_path, device, load_config=False)
-        vae._config = config
-        return vae, config
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'checkpoint_version': '2.0',  # Version for tracking checkpoint format
+    }
+    
+    # Add optional components
+    if config is not None:
+        checkpoint['config'] = config
+    
+    if optimizer_state is not None:
+        checkpoint['optimizer_state_dict'] = optimizer_state
+    
+    if epoch is not None:
+        checkpoint['epoch'] = epoch
+    
+    if loss is not None:
+        checkpoint['loss'] = loss
+    
+    if metadata is not None:
+        # Filter out non-serializable objects from metadata
+        safe_metadata = {}
+        for key, value in metadata.items():
+            # Only save basic types
+            if isinstance(value, (str, int, float, bool, list, dict, tuple)):
+                safe_metadata[key] = value
+            elif hasattr(value, '__dict__'):
+                # Try to save class name for reference
+                safe_metadata[f'{key}_class'] = value.__class__.__name__
+        checkpoint['metadata'] = safe_metadata
+    
+    # Save training objects only if explicitly requested
+    if save_training_objects and metadata:
+        # Store class names instead of actual objects
+        training_info = {}
+        for key in ['loss_fn', 'scheduler', 'curriculum']:
+            if key in metadata:
+                obj = metadata[key]
+                if hasattr(obj, '__class__'):
+                    training_info[f'{key}_class'] = obj.__class__.__name__
+                    training_info[f'{key}_module'] = obj.__class__.__module__
+        if training_info:
+            checkpoint['training_info'] = training_info
+    
+    # Save with weights_only=False to preserve all information
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"Saved checkpoint to {checkpoint_path}")
+
+
+def load_checkpoint_safe(
+    checkpoint_path: str,
+    model: Optional[torch.nn.Module] = None,
+    device: Optional[torch.device] = None,
+    load_optimizer: bool = False
+) -> Dict[str, Any]:
+    """
+    Safe checkpoint loading that handles various checkpoint formats.
+    
+    Parameters
+    ----------
+    checkpoint_path : str
+        Path to checkpoint
+    model : torch.nn.Module, optional
+        Model to load state into
+    device : torch.device, optional
+        Device to load to
+    load_optimizer : bool
+        Whether to load optimizer state
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Checkpoint dictionary with loaded components
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Ensure dummy classes exist
+    create_dummy_classes()
+    
+    # Try loading with our safe approach
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        logger.info("Loaded checkpoint with weights_only=True")
+    except:
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+            logger.info("Loaded checkpoint with weights_only=False")
+        except Exception as e:
+            logger.error(f"Failed to load checkpoint: {e}")
+            raise
+    
+    # Handle different checkpoint formats
+    result = {}
+    
+    # Extract model state
+    if 'model_state_dict' in checkpoint:
+        result['model_state_dict'] = checkpoint['model_state_dict']
+    elif 'state_dict' in checkpoint:
+        # Handle old format
+        state_dict = checkpoint['state_dict']
+        # Remove 'model.' prefix if present
+        result['model_state_dict'] = {k[6:] if k.startswith('model.') else k: v 
+                                      for k, v in state_dict.items()}
     else:
-        return load_vae_model(checkpoint_path, device)
+        # Assume the checkpoint itself is the state dict
+        result['model_state_dict'] = checkpoint
+    
+    # Load into model if provided
+    if model is not None:
+        model.load_state_dict(result['model_state_dict'], strict=False)
+        model.to(device)
+    
+    # Extract other components
+    for key in ['config', 'epoch', 'loss', 'metadata', 'training_info']:
+        if key in checkpoint:
+            result[key] = checkpoint[key]
+    
+    if load_optimizer and 'optimizer_state_dict' in checkpoint:
+        result['optimizer_state_dict'] = checkpoint['optimizer_state_dict']
+    
+    return result
