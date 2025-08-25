@@ -114,15 +114,32 @@ def create_dummy_classes():
         distributed_module.__path__ = []  # Make it a package
         sys.modules['cryolens.training.distributed'] = distributed_module
         setattr(training_module, 'distributed', distributed_module)
+    else:
+        distributed_module = sys.modules['cryolens.training.distributed']
         
-        # Add common distributed training utilities as dummies
-        class DummyDistributedTrainer:
-            def __init__(self, *args, **kwargs):
-                pass
-        
-        setattr(distributed_module, 'DistributedTrainer', DummyDistributedTrainer)
-        setattr(distributed_module, 'setup_distributed', lambda: None)
-        setattr(distributed_module, 'cleanup_distributed', lambda: None)
+    # Add common distributed training utilities as dummies
+    class DummyDistributedTrainer:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class DistributedConfig:
+        """Dummy class for distributed configuration."""
+        def __init__(self, *args, **kwargs):
+            self.world_size = 1
+            self.rank = 0
+            self.local_rank = 0
+            self.backend = 'nccl'
+            self.master_addr = 'localhost'
+            self.master_port = '12355'
+    
+    setattr(distributed_module, 'DistributedTrainer', DummyDistributedTrainer)
+    setattr(distributed_module, 'DistributedConfig', DistributedConfig)
+    setattr(distributed_module, 'setup_distributed', lambda: None)
+    setattr(distributed_module, 'cleanup_distributed', lambda: None)
+    
+    # Also add to __main__ and builtins for maximum compatibility
+    setattr(__main__, 'DistributedConfig', DistributedConfig)
+    builtins.DistributedConfig = DistributedConfig
 
 
 def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
