@@ -172,6 +172,79 @@ class CryoLensServer:
     def _register_endpoints(self, app: FastAPI):
         """Register all API endpoints."""
         
+        @app.get("/")
+        async def root():
+            """Root endpoint with server metadata and information."""
+            return {
+                "name": "CryoLens VAE Server",
+                "version": "1.0.0",
+                "description": "FastAPI server for CryoLens VAE processing",
+                "repository": "https://github.com/czi-ai/cryolens",
+                "documentation": "https://github.com/czi-ai/cryolens/tree/refactor-core-utilities",
+                "model": {
+                    "loaded": self.model is not None,
+                    "checkpoint": self.checkpoint_path,
+                    "device": str(self.device),
+                    "config": self.config if self.config else None
+                },
+                "endpoints": {
+                    "root": {
+                        "path": "/",
+                        "method": "GET",
+                        "description": "Server metadata and information"
+                    },
+                    "health": {
+                        "path": "/health",
+                        "method": "GET",
+                        "description": "Health check endpoint"
+                    },
+                    "model_info": {
+                        "path": "/model_info",
+                        "method": "GET",
+                        "description": "Detailed model configuration"
+                    },
+                    "reconstruct": {
+                        "path": "/reconstruct",
+                        "method": "POST",
+                        "description": "Reconstruct a volume using the VAE"
+                    },
+                    "extract_features": {
+                        "path": "/extract_features",
+                        "method": "POST",
+                        "description": "Extract embeddings, pose, and global weight"
+                    },
+                    "extract_gaussian_splats": {
+                        "path": "/extract_gaussian_splats",
+                        "method": "POST",
+                        "description": "Extract Gaussian splat parameters"
+                    },
+                    "batch_process": {
+                        "path": "/batch_process",
+                        "method": "POST",
+                        "description": "Process multiple volumes in batch"
+                    },
+                    "statistics": {
+                        "path": "/statistics",
+                        "method": "GET",
+                        "description": "Get statistics for a volume"
+                    }
+                },
+                "capabilities": {
+                    "reconstruction": True,
+                    "feature_extraction": True,
+                    "gaussian_splats": True,
+                    "batch_processing": True,
+                    "segmented_decoder": "SegmentedGaussianSplatDecoder" in str(type(self.model.decoder)) if self.model else False,
+                    "final_convolution_control": True
+                },
+                "system": {
+                    "cuda_available": torch.cuda.is_available(),
+                    "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+                    "cuda_device_name": torch.cuda.get_device_name() if torch.cuda.is_available() else None,
+                    "torch_version": torch.__version__
+                }
+            }
+        
         @app.get("/health")
         async def health_check():
             """Health check endpoint."""
