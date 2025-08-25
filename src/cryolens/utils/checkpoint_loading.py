@@ -162,7 +162,7 @@ def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
         
         # Look for experiment directory patterns
         for i, part in enumerate(path_parts):
-            if part.startswith('abl-') or part.startswith('altcurr') or part.startswith('experiment_'):
+            if part.startswith('abl-') or part.startswith('altcurr') or part.startswith('cryolens-') or part.startswith('experiment_'):
                 experiment_dir_idx = i
                 break
         
@@ -174,7 +174,8 @@ def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
                 "training_params.json",
                 "training_parameters.json", 
                 "config.json",
-                "experiment_config.json"
+                "experiment_config.json",
+                "params.json"
             ]
             
             for filename in possible_files:
