@@ -39,16 +39,29 @@ def create_dummy_classes():
         def TrainingConfig(self):
             return TrainingConfig
 
-    # Add to module namespace
+    # Add to multiple namespaces to ensure they're found
     import builtins
+    import __main__
+    
+    # Add to builtins
     builtins.CurriculumScheduler = CurriculumScheduler
     builtins.TrainingConfig = TrainingConfig
     
+    # Add to __main__ module (where the script runs)
+    setattr(__main__, 'CurriculumScheduler', CurriculumScheduler)
+    setattr(__main__, 'TrainingConfig', TrainingConfig)
+    setattr(__main__, 'tomotwin', DummyTomotwin())
+    
+    # Add to current module
     current_module = sys.modules[__name__]
     setattr(current_module, 'CurriculumScheduler', CurriculumScheduler)
     setattr(current_module, 'TrainingConfig', TrainingConfig)
     setattr(current_module, 'tomotwin', DummyTomotwin())
+    
+    # Also register as a module
     sys.modules['tomotwin'] = DummyTomotwin()
+    sys.modules['CurriculumScheduler'] = CurriculumScheduler
+    sys.modules['TrainingConfig'] = TrainingConfig
 
 
 def load_training_parameters(checkpoint_path: str) -> Optional[Dict[str, Any]]:
