@@ -116,7 +116,7 @@ import requests
 import numpy as np
 
 # Create a test volume
-test_volume = np.random.randn(64, 64, 64).tolist()
+test_volume = np.random.randn(48, 48, 48).tolist()
 
 # Send reconstruction request
 response = requests.post(
