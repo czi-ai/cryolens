@@ -3,7 +3,6 @@ from .losses import (
     NormalizedMSELoss, 
     ContrastiveAffinityLoss, 
     AffinityCosineLoss,
-    AdaptiveContrastiveAffinityLoss
 )
 
 __all__ = [
@@ -11,5 +10,4 @@ __all__ = [
     'NormalizedMSELoss', 
     'ContrastiveAffinityLoss',
     'AffinityCosineLoss',
-    'AdaptiveContrastiveAffinityLoss'
 ]
