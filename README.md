@@ -2,6 +2,14 @@
 
 CryoLens is a generative model and toolkit for 3D reconstruction of molecular structures from cryoET tomograms.
 
+## Features
+
+- **Generative modeling**: VAE-based architecture for learning molecular structure representations
+- **3D reconstruction**: Reconstruct molecular structures from cryoET particle data
+- **Pose analysis**: Comprehensive utilities for 3D rotation analysis and alignment
+- **Inference server**: FastAPI-based server for model inference
+- **Gaussian splats**: Extract Gaussian splat representations for visualization
+
 ## Installation
 
 CryoLens requires Python 3.11 or 3.12. We recommend using `uv` for package management:
@@ -27,6 +35,74 @@ Alternatively, you can use pip:
 pip install -e .
 ```
 
+## Pose Analysis Utilities
+
+CryoLens includes comprehensive utilities for analyzing and aligning 3D rotations and poses.
+
+### Kabsch Alignment
+
+Align point clouds and find optimal rotations:
+
+```python
+from cryolens.utils import kabsch_alignment
+
+# Align two point clouds
+R_optimal, rmsd = kabsch_alignment(points_source, points_target)
+print(f"RMSD after alignment: {rmsd:.3f}")
+```
+
+### Rotation Metrics
+
+Compute distances and metrics between rotations:
+
+```python
+from cryolens.utils import compute_geodesic_distance, compute_rotation_metrics
+
+# Geodesic distance between rotations
+dist = compute_geodesic_distance(R1, R2)
+print(f"Rotation angle: {np.degrees(dist):.1f} degrees")
+
+# Comprehensive metrics for pose predictions
+metrics = compute_rotation_metrics(predicted_poses, ground_truth_poses)
+print(f"Mean angular error: {metrics['mean_geodesic_error']:.2f} degrees")
+```
+
+### Rotation Set Alignment
+
+Align sets of rotations to find global transformations:
+
+```python
+from cryolens.utils import align_rotation_sets
+
+# Find global rotation aligning recovered poses to ground truth
+aligned_poses, R_global, metrics = align_rotation_sets(
+    recovered_poses, ground_truth_poses
+)
+print(f"Alignment error: {metrics['mean_angular_error']:.2f} degrees")
+```
+
+### Format Conversions
+
+Convert between rotation representations:
+
+```python
+from cryolens.utils import (
+    rotation_matrix_to_euler,
+    euler_to_rotation_matrix,
+    rotation_matrix_to_quaternion,
+    quaternion_to_rotation_matrix,
+    axis_angle_to_rotation_matrix,
+    rotation_matrix_to_axis_angle,
+)
+
+# Convert rotation matrix to Euler angles
+euler_angles = rotation_matrix_to_euler(R, convention="XYZ", degrees=True)
+
+# Convert to quaternion (w, x, y, z format)
+quaternion = rotation_matrix_to_quaternion(R, scalar_first=True)
+
+# Convert to axis-angle
+axis, angle = rotation_matrix_to_axis_angle(R)
 ### Optional: Copick Integration
 
 To use the Copick integration for loading particles from cryoET datasets:
