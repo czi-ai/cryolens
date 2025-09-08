@@ -6,7 +6,8 @@ CryoLens is a generative model and toolkit for 3D reconstruction of molecular st
 
 - **Generative modeling**: VAE-based architecture for learning molecular structure representations
 - **3D reconstruction**: Reconstruct molecular structures from cryoET particle data
-- **Pose analysis**: Comprehensive utilities for 3D rotation analysis and alignment
+- **Evaluation metrics**: Comprehensive metrics for embeddings, reconstructions, and poses
+- **Pose analysis**: Utilities for 3D rotation analysis and alignment
 - **Inference server**: FastAPI-based server for model inference
 - **Gaussian splats**: Extract Gaussian splat representations for visualization
 
@@ -33,6 +34,81 @@ Alternatively, you can use pip:
 
 ```bash
 pip install -e .
+```
+
+## Evaluation Metrics
+
+CryoLens provides comprehensive metrics for evaluating model performance across embeddings, reconstructions, and poses.
+
+### Embedding Space Metrics
+
+Evaluate the quality of learned embeddings and clustering:
+
+```python
+from cryolens.evaluation import (
+    compute_class_separation_metrics,
+    compute_embedding_diversity,
+    compute_mahalanobis_overlap
+)
+
+# Analyze class separation in embedding space
+metrics = compute_class_separation_metrics(embeddings, labels)
+print(f"Separation ratio: {metrics['separation_ratio']:.2f}")
+print(f"Silhouette score: {metrics['silhouette_score']:.3f}")
+
+# Compute embedding diversity
+diversity = compute_embedding_diversity(embeddings, method='variance')
+print(f"Embedding diversity: {diversity:.2f}")
+
+# Analyze class overlap with Mahalanobis distance
+overlap_matrix, classes = compute_mahalanobis_overlap(embeddings, labels)
+```
+
+### Reconstruction Quality Metrics
+
+Evaluate 3D reconstruction quality:
+
+```python
+from cryolens.evaluation import (
+    compute_reconstruction_metrics,
+    compute_fourier_shell_correlation
+)
+
+# Compute reconstruction metrics
+metrics = compute_reconstruction_metrics(
+    reconstruction,
+    ground_truth=reference_volume  # optional
+)
+print(f"Contrast: {metrics['contrast']:.2f}")
+print(f"Edge strength: {metrics['edge_strength']:.3f}")
+print(f"SNR estimate: {metrics['snr_estimate']:.1f} dB")
+
+# Compute Fourier Shell Correlation
+fsc = compute_fourier_shell_correlation(volume1, volume2)
+print(f"Resolution at FSC=0.143: {fsc['resolution']:.1f} voxels")
+```
+
+### Integrated Evaluation
+
+Comprehensive model evaluation across all metrics:
+
+```python
+from cryolens.evaluation import evaluate_model_performance
+
+# Evaluate complete model performance
+results = evaluate_model_performance(
+    embeddings=latent_vectors,
+    labels=class_labels,
+    reconstructions=reconstructed_volumes,
+    ground_truth=reference_volumes,
+    predicted_poses=predicted_rotations,
+    true_poses=ground_truth_rotations
+)
+
+# Access different metric categories
+print(f"Embedding separation: {results['embedding_metrics']['separation_ratio']:.2f}")
+print(f"Mean reconstruction correlation: {results['reconstruction_summary']['mean_correlation']:.3f}")
+print(f"Pose error: {results['pose_metrics']['mean_geodesic_error']:.1f}°")
 ```
 
 ## Pose Analysis Utilities
@@ -103,6 +179,8 @@ quaternion = rotation_matrix_to_quaternion(R, scalar_first=True)
 
 # Convert to axis-angle
 axis, angle = rotation_matrix_to_axis_angle(R)
+```
+
 ### Optional: Copick Integration
 
 To use the Copick integration for loading particles from cryoET datasets:
