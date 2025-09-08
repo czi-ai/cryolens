@@ -5,6 +5,7 @@ This module provides utilities for loading and processing cryo-ET data from Copi
 including particle extraction from tomograms and integration with the CZ cryoET Data Portal.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 import warnings
@@ -18,7 +19,7 @@ try:
 except ImportError:
     COPICK_AVAILABLE = False
     warnings.warn(
-        "Copick is not installed. Install it with: pip install copick-tools",
+        "Copick is not installed. Install it with: pip install copick",
         ImportWarning
     )
 
@@ -60,7 +61,7 @@ class CopickDataLoader:
         if not COPICK_AVAILABLE:
             raise ImportError(
                 "Copick is required for this functionality. "
-                "Install it with: pip install copick-tools"
+                "Install it with: pip install copick"
             )
         
         self.config_path = Path(config_path)
@@ -437,29 +438,47 @@ class CopickDataLoader:
         return np.eye(3, dtype=np.float32)
 
 
-def load_ml_challenge_configs() -> Dict[str, str]:
+def load_ml_challenge_configs(base_path: Optional[Union[str, Path]] = None) -> Dict[str, str]:
     """
     Get the standard ML Challenge Copick configuration paths.
+    
+    Parameters
+    ----------
+    base_path : Optional[Union[str, Path]]
+        Base path to the ML Challenge configs. If None, will look for
+        configs in the current directory or environment variable.
     
     Returns
     -------
     Dict[str, str]
         Dictionary mapping dataset names to configuration file paths
     """
-    base_path = "/mnt/czi-sci-ai/imaging-models/data/cryolens/mlc/copick_czcdp"
+    import os
+    
+    # Try to find base path from environment or parameter
+    if base_path is None:
+        base_path = os.environ.get("CRYOLENS_ML_CHALLENGE_PATH", "")
+        if not base_path:
+            warnings.warn(
+                "ML Challenge config path not specified. "
+                "Set CRYOLENS_ML_CHALLENGE_PATH environment variable or provide base_path parameter."
+            )
+            return {}
+    
+    base_path = Path(base_path)
     
     configs = {
-        "synthetic": f"{base_path}/ml_challenge_synthetic.json",
-        "experimental_training": f"{base_path}/ml_challenge_experimental_training.json",
-        "experimental_public_test": f"{base_path}/ml_challenge_experimental_publictest.json",
-        "experimental_private_test": f"{base_path}/ml_challenge_experimental_privatetest.json"
+        "synthetic": base_path / "ml_challenge_synthetic.json",
+        "experimental_training": base_path / "ml_challenge_experimental_training.json",
+        "experimental_public_test": base_path / "ml_challenge_experimental_publictest.json",
+        "experimental_private_test": base_path / "ml_challenge_experimental_privatetest.json"
     }
     
     # Check which configs exist
     available_configs = {}
     for name, path in configs.items():
-        if Path(path).exists():
-            available_configs[name] = path
+        if path.exists():
+            available_configs[name] = str(path)
         else:
             warnings.warn(f"ML Challenge config not found: {name} at {path}")
     

@@ -34,7 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 copick = [
-    "copick>=0.5.0",
+    "copick",
     "zarr>=2.16.0",
 ]
 dev = [

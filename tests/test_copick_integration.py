@@ -242,7 +242,7 @@ class TestStandaloneFunctions:
             
             mock_exists.side_effect = exists_side_effect
             
-            configs = load_ml_challenge_configs()
+            configs = load_ml_challenge_configs("/test/path")
             
             assert 'synthetic' in configs
             assert configs['synthetic'].endswith('ml_challenge_synthetic.json')

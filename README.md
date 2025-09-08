@@ -74,9 +74,15 @@ CryoLens provides easy access to ML Challenge datasets:
 
 ```python
 from cryolens.data.copick import load_ml_challenge_configs
+import os
+
+# Set the path to ML Challenge configs (or use environment variable)
+os.environ["CRYOLENS_ML_CHALLENGE_PATH"] = "/path/to/ml_challenge/configs"
 
 # Get available ML Challenge configurations
 configs = load_ml_challenge_configs()
+# Or provide path directly:
+# configs = load_ml_challenge_configs("/path/to/ml_challenge/configs")
 
 # Load experimental test data
 if "experimental_public_test" in configs:
