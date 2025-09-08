@@ -27,6 +27,72 @@ Alternatively, you can use pip:
 pip install -e .
 ```
 
+### Optional: Copick Integration
+
+To use the Copick integration for loading particles from cryoET datasets:
+
+```bash
+# Install with Copick support
+pip install -e ".[copick]"
+```
+
+## Copick Integration
+
+CryoLens includes support for loading particles directly from Copick projects, including datasets from the CZ cryoET Data Portal.
+
+### Basic Usage
+
+```python
+from cryolens.data.copick import CopickDataLoader
+
+# Load particles from a Copick project
+loader = CopickDataLoader("path/to/copick_config.json")
+
+# List available structures
+structures = loader.list_available_structures()
+print(f"Available structures: {structures}")
+
+# Load particles for specific structures
+results = loader.load_particles(
+    structure_filter=["ribosome", "proteasome"],
+    max_particles_per_structure=100,
+    target_voxel_spacing=10.0,  # in Angstroms
+    box_size=48
+)
+
+# Access loaded data
+for structure_name, data in results.items():
+    particles = data['particles']  # (N, 48, 48, 48) array
+    orientations = data['orientations']  # (N, 3, 3) rotation matrices
+    positions = data['positions']  # (N, 3) positions in Angstroms
+    print(f"{structure_name}: {len(particles)} particles loaded")
+```
+
+### ML Challenge Datasets
+
+CryoLens provides easy access to ML Challenge datasets:
+
+```python
+from cryolens.data.copick import load_ml_challenge_configs
+import os
+
+# Set the path to ML Challenge configs (or use environment variable)
+os.environ["CRYOLENS_ML_CHALLENGE_PATH"] = "/path/to/ml_challenge/configs"
+
+# Get available ML Challenge configurations
+configs = load_ml_challenge_configs()
+# Or provide path directly:
+# configs = load_ml_challenge_configs("/path/to/ml_challenge/configs")
+
+# Load experimental test data
+if "experimental_public_test" in configs:
+    loader = CopickDataLoader(configs["experimental_public_test"])
+    results = loader.load_particles(
+        structure_filter=["ribosome"],
+        max_particles_per_structure=50
+    )
+```
+
 ## Running the CryoLens Server
 
 CryoLens includes a FastAPI server that provides REST API endpoints for VAE functionality including volume reconstruction, feature extraction, and Gaussian splat extraction.
