@@ -56,7 +56,8 @@ class InferencePipeline:
         return_embeddings: bool = True,
         return_reconstruction: bool = True,
         return_splat_params: bool = False,
-        use_identity_pose: bool = True
+        use_identity_pose: bool = True,
+        splat_segment: str = 'affinity'
     ) -> Dict[str, Any]:
         """
         Process a single volume through the model.
@@ -73,6 +74,8 @@ class InferencePipeline:
             Whether to return Gaussian splat parameters
         use_identity_pose : bool
             Whether to use identity pose for reconstruction
+        splat_segment : str
+            'affinity' for structure splats only, 'all' for all splats
             
         Returns
         -------
@@ -124,7 +127,16 @@ class InferencePipeline:
                 results['reconstruction'] = reconstruction_np
             
             if return_splat_params:
-                results['splat_params'] = self._extract_splat_params(mu, pose, global_weight)
+                # Extract Gaussian splat parameters
+                splat_centroids, splat_sigmas, splat_weights = self._extract_splat_params(
+                    mu, pose, global_weight, splat_segment
+                )
+                results['splat_params'] = {
+                    'centroids': splat_centroids,
+                    'sigmas': splat_sigmas,
+                    'weights': splat_weights,
+                    'segment': splat_segment
+                }
         
         results['normalization_stats'] = norm_stats
         return results
@@ -324,14 +336,85 @@ class InferencePipeline:
     
     def _extract_splat_params(
         self,
-        latent: torch.Tensor,
+        mu: torch.Tensor,
         pose: torch.Tensor,
-        global_weight: torch.Tensor
-    ) -> Dict[str, np.ndarray]:
-        """Extract Gaussian splat parameters from decoder."""
-        # This would need to be implemented based on the specific decoder type
-        # For now, return empty dict
-        return {}
+        global_weight: torch.Tensor,
+        splat_segment: str = 'affinity'
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Extract Gaussian splat parameters from decoder.
+        
+        Parameters
+        ----------
+        mu : torch.Tensor
+            Latent embeddings
+        pose : torch.Tensor
+            Pose parameters
+        global_weight : torch.Tensor
+            Global weight scaling
+        splat_segment : str
+            'affinity' for structure splats only, 'all' for all splats
+            
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray, np.ndarray]
+            centroids, sigmas, weights as numpy arrays
+        """
+        decoder = self.model.decoder
+        
+        with torch.no_grad():
+            # Check if this is a segmented decoder
+            if hasattr(decoder, 'affinity_centroids'):
+                # SegmentedGaussianSplatDecoder
+                if splat_segment == 'affinity':
+                    # Only extract structure splats from affinity segment
+                    affinity_size = decoder.affinity_segment_size
+                    mu_affinity = mu[:, :affinity_size]
+                    
+                    # Get affinity splat parameters
+                    centroids = decoder.affinity_centroids(mu_affinity)
+                    sigmas = decoder.affinity_sigmas(mu_affinity)
+                    weights = decoder.affinity_weights(mu_affinity)
+                else:
+                    # Extract all splats (both affinity and free segments)
+                    affinity_size = decoder.affinity_segment_size
+                    mu_affinity = mu[:, :affinity_size]
+                    mu_free = mu[:, affinity_size:]
+                    
+                    # Get affinity splats
+                    affinity_centroids = decoder.affinity_centroids(mu_affinity)
+                    affinity_sigmas = decoder.affinity_sigmas(mu_affinity)
+                    affinity_weights = decoder.affinity_weights(mu_affinity)
+                    
+                    # Get free splats
+                    free_centroids = decoder.free_centroids(mu_free)
+                    free_sigmas = decoder.free_sigmas(mu_free)
+                    free_weights = decoder.free_weights(mu_free)
+                    
+                    # Concatenate
+                    centroids = torch.cat([affinity_centroids, free_centroids], dim=1)
+                    sigmas = torch.cat([affinity_sigmas, free_sigmas], dim=1)
+                    weights = torch.cat([affinity_weights, free_weights], dim=1)
+            else:
+                # Standard GaussianSplatDecoder
+                centroids = decoder.centroids(mu)
+                sigmas = decoder.sigmas(mu)
+                weights = decoder.weights(mu)
+            
+            # Apply global weight scaling
+            weights = weights * global_weight
+            
+            # Reshape centroids to (batch, n_splats, 3)
+            batch_size = centroids.shape[0]
+            n_splats = sigmas.shape[1]
+            centroids = centroids.reshape(batch_size, n_splats, 3)
+            
+            # Convert to numpy and remove batch dimension (single volume)
+            centroids_np = centroids.cpu().numpy()[0]
+            sigmas_np = sigmas.cpu().numpy()[0]
+            weights_np = weights.cpu().numpy()[0]
+            
+        return centroids_np, sigmas_np, weights_np
 
 
 def create_inference_pipeline(
