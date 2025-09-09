@@ -56,7 +56,8 @@ class InferencePipeline:
         return_embeddings: bool = True,
         return_reconstruction: bool = True,
         return_splat_params: bool = False,
-        use_identity_pose: bool = True
+        use_identity_pose: bool = True,
+        splat_segment: str = 'affinity'
     ) -> Dict[str, Any]:
         """
         Process a single volume through the model.
@@ -73,6 +74,8 @@ class InferencePipeline:
             Whether to return Gaussian splat parameters
         use_identity_pose : bool
             Whether to use identity pose for reconstruction
+        splat_segment : str
+            'affinity' for structure splats only, 'all' for all splats
             
         Returns
         -------
@@ -124,7 +127,16 @@ class InferencePipeline:
                 results['reconstruction'] = reconstruction_np
             
             if return_splat_params:
-                results['splat_params'] = self._extract_splat_params(mu, pose, global_weight)
+                # Extract Gaussian splat parameters
+                splat_centroids, splat_sigmas, splat_weights = self._extract_splat_params(
+                    mu, pose, global_weight, splat_segment
+                )
+                results['splat_params'] = {
+                    'centroids': splat_centroids,
+                    'sigmas': splat_sigmas,
+                    'weights': splat_weights,
+                    'segment': splat_segment
+                }
         
         results['normalization_stats'] = norm_stats
         return results
