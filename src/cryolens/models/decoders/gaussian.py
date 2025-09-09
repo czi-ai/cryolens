@@ -425,6 +425,12 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         Only applies pose transformation to splats from the affinity segment.
         The free segment's splats remain static (no pose transformation).
         
+        Note on coordinate system:
+        The returned splat coordinates are in the renderer's coordinate system [X, Y, Z].
+        However, volume indexing follows NumPy convention: volume[Z, Y, X].
+        For visualization, you may need to remap coordinates as [2, 0, 1] to align
+        splats with volume slices.
+        
         Parameters
         ----------
         z : torch.Tensor
@@ -586,9 +592,16 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         # Calculate expanded shape for rendering
         expanded_shape = tuple(s + 2 * total_padding for s in self._shape)
         
-        # Temporarily configure renderer for expanded shape
+        # Store original shape for later restoration
         original_shape = self._shape
-        self._shape = expanded_shape
+        
+        # Reconfigure renderer for expanded shape if needed
+        # The renderer needs to match the actual rendering dimensions
+        if self._splatter._shape != expanded_shape:
+            self._splatter = GaussianSplatRenderer(
+                expanded_shape,
+                device=device,
+            ).to(device)
         
         if segment_visualization:
             # Generate and render separate outputs for each segment
@@ -724,15 +737,20 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
             
         else:
             # Regular path: combine all splats with appropriate pose application and global weight scaling
+            # Note: decode_splats already uses the correct expanded shape scaling
             splats, weights, sigmas = self.decode_splats(z, pose, global_weight)
+            
+            # Ensure renderer is configured for expanded shape
+            if self._splatter._shape != expanded_shape:
+                self._splatter = GaussianSplatRenderer(
+                    expanded_shape,
+                    device=device,
+                ).to(device)
             
             # Apply the gaussian splat renderer
             x = self._splatter(
                 splats, weights, sigmas, splat_sigma_range=self._splat_sigma_range
             )
-            
-            # Reset shape
-            self._shape = original_shape
             
             # Apply final convolution if needed
             if self._output_channels is not None and use_final_convolution:
