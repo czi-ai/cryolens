@@ -512,8 +512,11 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         rotated_affinity_splats = rotated_affinity_splats[:, :self._ndim, :]
         free_splats = free_splats[:, :self._ndim, :]
         
-        # Scale for padding
-        padded_shape = tuple(s + 2 * self._padding for s in self._shape)
+        # Scale for padding (must include convolution padding for consistency)
+        # The renderer uses expanded_shape for both normal and visualization paths
+        conv_padding = 4  # For 9x9 kernel with padding="valid"
+        total_padding = self._padding + conv_padding
+        padded_shape = tuple(s + 2 * total_padding for s in self._shape)
         scale_factors = torch.tensor(
             [s2/s1 for s1, s2 in zip(self._shape, padded_shape)],
             device=device  # Use the same device as input tensors
