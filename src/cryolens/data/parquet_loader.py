@@ -281,7 +281,7 @@ def get_available_snrs(parquet_dir: str, structure_name: str) -> List[float]:
 
 
 def load_dataset_with_poses(structure: str, n_samples: int, snr: float,
-                           parquet_dir: str = "/cryolens_data/dataset_003/parquet_dir/",
+                           parquet_dir: str,
                            box_size: int = 48) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load samples with ground truth rotation matrices from dataset.
