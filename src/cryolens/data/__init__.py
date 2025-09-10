@@ -2,6 +2,16 @@
 CryoLens data loading utilities.
 """
 
+# Import parquet loader functions
+from .parquet_loader import (
+    extract_volume_from_row,
+    extract_pose_from_row,
+    load_parquet_samples,
+    get_available_structures,
+    get_available_snrs,
+    load_dataset_with_poses
+)
+
 # Import Copick integration if available
 try:
     from .copick import (
@@ -11,6 +21,14 @@ try:
         COPICK_AVAILABLE
     )
     __all__ = [
+        # Parquet loader functions
+        "extract_volume_from_row",
+        "extract_pose_from_row",
+        "load_parquet_samples",
+        "get_available_structures",
+        "get_available_snrs",
+        "load_dataset_with_poses",
+        # Copick functions
         "CopickDataLoader",
         "extract_particles_from_tomogram", 
         "load_ml_challenge_configs",
@@ -18,4 +36,14 @@ try:
     ]
 except ImportError:
     COPICK_AVAILABLE = False
-    __all__ = ["COPICK_AVAILABLE"]
+    __all__ = [
+        # Parquet loader functions
+        "extract_volume_from_row",
+        "extract_pose_from_row",
+        "load_parquet_samples",
+        "get_available_structures",
+        "get_available_snrs",
+        "load_dataset_with_poses",
+        # Copick availability flag
+        "COPICK_AVAILABLE"
+    ]
