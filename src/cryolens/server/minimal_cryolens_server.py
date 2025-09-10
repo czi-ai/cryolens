@@ -321,9 +321,9 @@ class CryoLensServer:
                     # Extract splats using the dedicated function from splats module
                     try:
                         centroids, sigmas, weights, _ = extract_gaussian_splats(
-                            self.model,
-                            np.expand_dims(input_volume, axis=0),  # Add batch dimension
-                            self.config,
+                            model=self.model,
+                            volumes=np.expand_dims(input_volume, axis=0),  # Add batch dimension
+                            config=self.config,
                             device=self.device,
                             batch_size=1
                         )
@@ -456,9 +456,9 @@ class CryoLensServer:
                 
                 # Extract splats using the refactored function
                 centroids, sigmas, weights, embeddings = extract_gaussian_splats(
-                    self.model,
-                    np.expand_dims(input_volume, axis=0),  # Add batch dimension
-                    self.config,
+                    model=self.model,
+                    volumes=np.expand_dims(input_volume, axis=0),  # Add batch dimension
+                    config=self.config,
                     device=self.device,
                     batch_size=1
                 )
@@ -530,9 +530,9 @@ class CryoLensServer:
                 
                 elif request.operation == "splats":
                     centroids, sigmas, weights, embeddings = extract_gaussian_splats(
-                        self.model,
-                        input_volumes,
-                        self.config,
+                        model=self.model,
+                        volumes=input_volumes,
+                        config=self.config,
                         device=self.device,
                         batch_size=request.batch_size
                     )
