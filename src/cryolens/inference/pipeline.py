@@ -334,6 +334,84 @@ class InferencePipeline:
         
         return volume[tuple(crop_slices)]
     
+    def process_particle_with_splats(
+        self,
+        particle: np.ndarray,
+        box_size: int = 48
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """
+        Extract Gaussian splat parameters from a particle.
+        
+        This is a simplified interface specifically for extracting splats
+        from particles in voxel space coordinates.
+        
+        Parameters
+        ----------
+        particle : np.ndarray
+            Input particle volume of shape (D, H, W)
+        box_size : int
+            Size of the box (default: 48)
+            
+        Returns
+        -------
+        Optional[Dict[str, np.ndarray]]
+            Dictionary containing:
+            - 'centroids': Splat positions in voxel space [0, box_size]
+            - 'sigmas': Splat standard deviations
+            - 'weights': Splat weights
+            Or None if extraction fails
+        """
+        # Normalize volume
+        normalized, _ = normalize_volume(
+            particle,
+            method=self.normalization_method,
+            return_stats=True
+        )
+        
+        # Convert to tensor and add batch/channel dimensions
+        volume_tensor = torch.tensor(normalized, dtype=torch.float32)
+        volume_tensor = volume_tensor.unsqueeze(0).unsqueeze(0).to(self.device)
+        
+        try:
+            with torch.no_grad():
+                # Encode
+                mu, log_var, pose, global_weight = self.model.encode(volume_tensor)
+                
+                # Get decoder
+                decoder = self.model.decoder
+                
+                # Check if decoder has decode_splats method (newer interface)
+                if hasattr(decoder, 'decode_splats'):
+                    splats, weights, sigmas = decoder.decode_splats(mu, pose)
+                    weights = weights * torch.sigmoid(global_weight)
+                    
+                    # Convert to numpy and remove batch dimension
+                    splats_np = splats.cpu().numpy()[0].T  # Transpose to (n_splats, 3)
+                    weights_np = weights.cpu().numpy()[0]
+                    sigmas_np = sigmas.cpu().numpy()[0]
+                else:
+                    # Use standard splat extraction
+                    splats_np, sigmas_np, weights_np = self._extract_splat_params(
+                        mu, pose, global_weight, splat_segment='affinity'
+                    )
+                
+                # Transform from normalized [-1, 1] to voxel space [0, box_size]
+                splats_voxel = (splats_np + 1.0) * (box_size / 2.0)
+                
+                # Remap axes for consistency with expected coordinate system
+                # This maps (x, y, z) -> (z, x, y) which is common for cryo-EM data
+                splats_mapped = splats_voxel[:, [2, 0, 1]]
+                
+                return {
+                    'centroids': splats_mapped,
+                    'sigmas': sigmas_np,
+                    'weights': weights_np
+                }
+                
+        except Exception as e:
+            logger.warning(f"Failed to extract splats from particle: {e}")
+            return None
+    
     def _extract_splat_params(
         self,
         mu: torch.Tensor,

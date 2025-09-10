@@ -10,6 +10,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Tuple, List, Dict, Optional, Any, Union
 import logging
+from scipy.spatial.transform import Rotation as R
 
 logger = logging.getLogger(__name__)
 
@@ -277,3 +278,109 @@ def get_available_snrs(parquet_dir: str, structure_name: str) -> List[float]:
             continue
     
     return sorted(snr_values)
+
+
+def load_dataset_with_poses(structure: str, n_samples: int, snr: float,
+                           parquet_dir: str = "/cryolens_data/dataset_003/parquet_dir/",
+                           box_size: int = 48) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Load samples with ground truth rotation matrices from dataset.
+    
+    This function loads particle volumes along with their ground truth
+    orientations converted to rotation matrices.
+    
+    Parameters
+    ----------
+    structure : str
+        PDB structure name (e.g., '1g3i')
+    n_samples : int
+        Number of samples to load
+    snr : float
+        Signal-to-noise ratio
+    parquet_dir : str
+        Base directory containing parquet files
+    box_size : int
+        Expected box size for particles (default: 48)
+        
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        - particles: Array of shape (n_samples, box_size, box_size, box_size)
+        - gt_rotations: Array of rotation matrices, shape (n_samples, 3, 3)
+    """
+    
+    parquet_base = Path(parquet_dir)
+    
+    # Handle versioned directories
+    if not parquet_base.exists():
+        parent_dir = parquet_base.parent
+        pattern = parquet_base.name + "_*"
+        matching_dirs = list(parent_dir.glob(pattern))
+        if matching_dirs:
+            parquet_base = sorted(matching_dirs)[-1]
+            logger.info(f"Using versioned directory: {parquet_base}")
+    
+    structure_dir = parquet_base / structure / f"snr_{snr}"
+    
+    if not structure_dir.exists():
+        raise ValueError(f"Directory not found: {structure_dir}")
+    
+    batch_files = sorted(structure_dir.glob("batch_*.parquet"))
+    if not batch_files:
+        raise ValueError(f"No batch files found in {structure_dir}")
+    
+    particles = []
+    gt_rotations = []
+    
+    for batch_file in batch_files:
+        if len(particles) >= n_samples:
+            break
+        
+        try:
+            df = pd.read_parquet(batch_file)
+        except Exception as e:
+            logger.warning(f"Could not read {batch_file.name}: {e}")
+            continue
+        
+        for i in range(min(n_samples - len(particles), len(df))):
+            # Extract particle volume
+            volume = extract_volume_from_row(
+                df.iloc[i],
+                expected_shape=(box_size, box_size, box_size)
+            )
+            
+            if volume is None:
+                continue
+            
+            particles.append(volume)
+            
+            # Extract and decode orientation to rotation matrix
+            if 'orientation_axis_angle' in df.columns:
+                orientation_bytes = df.iloc[i]['orientation_axis_angle']
+                if isinstance(orientation_bytes, bytes):
+                    axis_angle = np.frombuffer(orientation_bytes, dtype=np.float64)
+                    if len(axis_angle) == 4:
+                        angle = axis_angle[0]
+                        axis = axis_angle[1:4]
+                        axis_norm = np.linalg.norm(axis)
+                        if axis_norm > 0:
+                            axis = axis / axis_norm
+                            rot = R.from_rotvec(angle * axis)
+                            gt_rotations.append(rot.as_matrix())
+                        else:
+                            # Handle zero axis (identity rotation)
+                            gt_rotations.append(np.eye(3))
+                    else:
+                        gt_rotations.append(np.eye(3))
+                else:
+                    gt_rotations.append(np.eye(3))
+            else:
+                # No orientation data, use identity
+                gt_rotations.append(np.eye(3))
+    
+    if not particles:
+        raise ValueError(f"No particles could be loaded from {structure_dir}")
+    
+    logger.info(f"Loaded {len(particles)} samples with ground truth orientations")
+    
+    return np.array(particles), np.array(gt_rotations)
