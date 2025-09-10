@@ -443,7 +443,7 @@ class CryoLensServer:
                 raise HTTPException(status_code=500, detail=str(e))
         
         @app.post("/extract_gaussian_splats")
-        async def extract_gaussian_splats(request: GaussianSplatRequest):
+        async def extract_gaussian_splats_endpoint(request: GaussianSplatRequest):
             """
             Extract Gaussian splat parameters from a volume.
             
@@ -486,7 +486,7 @@ class CryoLensServer:
                 return response
                 
             except Exception as e:
-                logger.error(f"Error in extract_gaussian_splats: {str(e)}")
+                logger.error(f"Error in extract_gaussian_splats_endpoint: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @app.post("/batch_process")
