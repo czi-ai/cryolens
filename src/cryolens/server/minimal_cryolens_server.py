@@ -321,9 +321,9 @@ class CryoLensServer:
                     # Extract splats using the dedicated function from splats module
                     try:
                         centroids, sigmas, weights, _ = extract_gaussian_splats(
-                            model=self.model,
-                            volumes=np.expand_dims(input_volume, axis=0),  # Add batch dimension
-                            config=self.config,
+                            self.model,
+                            np.expand_dims(input_volume, axis=0),  # Add batch dimension
+                            self.config,
                             device=self.device,
                             batch_size=1
                         )
@@ -443,7 +443,7 @@ class CryoLensServer:
                 raise HTTPException(status_code=500, detail=str(e))
         
         @app.post("/extract_gaussian_splats")
-        async def extract_gaussian_splats(request: GaussianSplatRequest):
+        async def extract_gaussian_splats_endpoint(request: GaussianSplatRequest):
             """
             Extract Gaussian splat parameters from a volume.
             
@@ -456,9 +456,9 @@ class CryoLensServer:
                 
                 # Extract splats using the refactored function
                 centroids, sigmas, weights, embeddings = extract_gaussian_splats(
-                    model=self.model,
-                    volumes=np.expand_dims(input_volume, axis=0),  # Add batch dimension
-                    config=self.config,
+                    self.model,
+                    np.expand_dims(input_volume, axis=0),  # Add batch dimension
+                    self.config,
                     device=self.device,
                     batch_size=1
                 )
@@ -486,7 +486,7 @@ class CryoLensServer:
                 return response
                 
             except Exception as e:
-                logger.error(f"Error in extract_gaussian_splats: {str(e)}")
+                logger.error(f"Error in extract_gaussian_splats_endpoint: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @app.post("/batch_process")
@@ -530,9 +530,9 @@ class CryoLensServer:
                 
                 elif request.operation == "splats":
                     centroids, sigmas, weights, embeddings = extract_gaussian_splats(
-                        model=self.model,
-                        volumes=input_volumes,
-                        config=self.config,
+                        self.model,
+                        input_volumes,
+                        self.config,
                         device=self.device,
                         batch_size=request.batch_size
                     )
