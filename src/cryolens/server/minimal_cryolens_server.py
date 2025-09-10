@@ -530,9 +530,9 @@ class CryoLensServer:
                 
                 elif request.operation == "splats":
                     centroids, sigmas, weights, embeddings = extract_gaussian_splats(
-                        self.model,
-                        input_volumes,
-                        self.config,
+                        model=self.model,
+                        volumes=input_volumes,
+                        config=self.config,
                         device=self.device,
                         batch_size=request.batch_size
                     )
