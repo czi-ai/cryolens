@@ -418,7 +418,8 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
                 ).to(device)
             
     def decode_splats(
-        self, z: torch.Tensor, pose: torch.Tensor, global_weight: Optional[torch.Tensor] = None
+        self, z: torch.Tensor, pose: torch.Tensor, global_weight: Optional[torch.Tensor] = None,
+        for_visualization: bool = False
     ) -> tuple[torch.Tensor]:
         """Decode the splats to retrieve the coordinates, weights and sigmas from both segments.
         
@@ -439,6 +440,8 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
             Pose tensor of shape (batch_size, 1 | 4)
         global_weight : torch.Tensor, optional
             Global weight tensor of shape (batch_size, 1) for amplitude scaling
+        for_visualization : bool, optional
+            If True, only apply renderer padding (not convolution padding) for raw splat visualization
             
         Returns
         -------
@@ -518,11 +521,17 @@ class SegmentedGaussianSplatDecoder(BaseDecoder):
         rotated_affinity_splats = rotated_affinity_splats[:, :self._ndim, :]
         free_splats = free_splats[:, :self._ndim, :]
         
-        # Scale for padding (must include convolution padding for consistency)
-        # The renderer uses expanded_shape for both normal and visualization paths
-        conv_padding = 4  # For 9x9 kernel with padding="valid"
-        total_padding = self._padding + conv_padding
-        padded_shape = tuple(s + 2 * total_padding for s in self._shape)
+        # Scale for padding
+        # When used for visualization (raw splats without convolution), only use renderer padding
+        # When used in forward pass with convolution, include convolution padding
+        if for_visualization:
+            # Only renderer padding for raw splat visualization
+            padded_shape = tuple(s + 2 * self._padding for s in self._shape)
+        else:
+            # Include convolution padding for the full forward pass
+            conv_padding = 4  # For 9x9 kernel with padding="valid"
+            total_padding = self._padding + conv_padding
+            padded_shape = tuple(s + 2 * total_padding for s in self._shape)
         scale_factors = torch.tensor(
             [s2/s1 for s1, s2 in zip(self._shape, padded_shape)],
             device=device  # Use the same device as input tensors

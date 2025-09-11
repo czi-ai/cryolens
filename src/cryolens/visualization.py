@@ -255,7 +255,13 @@ class VisualizationCallback(Callback):
                     
                     # Get raw gaussian splats (combined splats with no convolution)
                     try:
-                        splats, weights, sigmas = pl_module.model.decoder.decode_splats(z, pose)
+                        # Check if decoder supports for_visualization parameter
+                        if hasattr(pl_module.model.decoder, 'affinity_segment_size'):
+                            # SegmentedGaussianSplatDecoder - use for_visualization flag
+                            splats, weights, sigmas = pl_module.model.decoder.decode_splats(z, pose, for_visualization=True)
+                        else:
+                            # Regular GaussianSplatDecoder
+                            splats, weights, sigmas = pl_module.model.decoder.decode_splats(z, pose)
                         raw_splats = pl_module.model.decoder._splatter(
                             splats, weights, sigmas,
                             splat_sigma_range=pl_module.model.decoder._splat_sigma_range
@@ -336,7 +342,7 @@ class VisualizationCallback(Callback):
                             # Use only needed spatial dimensions
                             rotated_affinity_splats = rotated_affinity_splats[:, :decoder._ndim, :]
                             
-                            # Scale for padding
+                            # Scale for padding - only use renderer padding for visualization
                             padded_shape = tuple(s + 2 * decoder._padding for s in decoder._shape)
                             scale_factors = torch.tensor(
                                 [s2/s1 for s1, s2 in zip(decoder._shape, padded_shape)],
@@ -358,7 +364,7 @@ class VisualizationCallback(Callback):
                             # Use only needed spatial dimensions 
                             free_splats = free_centroids[:, :decoder._ndim, :]
                             
-                            # Scale for padding
+                            # Scale for padding - use same scale factors as affinity segment
                             free_splats = free_splats * scale_factors.view(1, -1, 1)
                             
                             # Render free splats only (no convolution)
