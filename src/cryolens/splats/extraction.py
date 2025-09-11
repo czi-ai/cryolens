@@ -23,6 +23,10 @@ def extract_gaussian_splats(
     """
     Extract Gaussian splat parameters from the VAE decoder.
     
+    The splats are extracted with the actual encoded pose applied, ensuring
+    they align with the reconstruction. For SegmentedGaussianSplatDecoder,
+    the pose is only applied to the affinity segment splats.
+    
     Parameters
     ----------
     model : torch.nn.Module
@@ -39,9 +43,9 @@ def extract_gaussian_splats(
     Returns
     -------
     Tuple containing:
-        - centroids: (N, num_splats, 3) - 3D positions of splats
+        - centroids: (N, num_splats, 3) - 3D positions of splats with pose applied
         - sigmas: (N, num_splats) - standard deviations
-        - weights: (N, num_splats) - weights/amplitudes
+        - weights: (N, num_splats) - weights/amplitudes with global weight applied
         - embeddings: (N, latent_dims) - latent embeddings
     """
     if device is None:
@@ -78,10 +82,11 @@ def extract_gaussian_splats(
             # Encode
             mu, log_var, pose, global_weight = model.encode(batch_tensor)
             
-            # Use identity pose to get canonical splats
-            identity_pose = torch.zeros(batch_tensor.shape[0], 4, device=device)
-            identity_pose[:, 0] = 1.0  # Set quaternion w component
-            identity_global_weight = torch.ones(batch_tensor.shape[0], 1, device=device)
+            # Use the actual encoded pose to get properly aligned splats
+            # This ensures splats match the reconstruction orientation
+            # Note: pose is already the actual pose from the encoder
+            actual_pose = pose
+            actual_global_weight = global_weight if global_weight is not None else torch.ones(batch_tensor.shape[0], 1, device=device)
             
             # Extract splat parameters from decoder
             decoder = model.decoder
@@ -90,12 +95,12 @@ def extract_gaussian_splats(
             if hasattr(decoder, 'affinity_centroids'):
                 # SegmentedGaussianSplatDecoder
                 centroids, sigmas, weights = _extract_segmented_splats(
-                    decoder, mu, identity_pose, identity_global_weight
+                    decoder, mu, actual_pose, actual_global_weight
                 )
             else:
                 # Standard GaussianSplatDecoder
                 centroids, sigmas, weights = _extract_standard_splats(
-                    decoder, mu, identity_pose, identity_global_weight
+                    decoder, mu, actual_pose, actual_global_weight
                 )
             
             # Store results
@@ -112,10 +117,10 @@ def extract_gaussian_splats(
     weights = np.concatenate(all_weights, axis=0)
     embeddings = np.concatenate(all_embeddings, axis=0)
     
-    # Reshape centroids to (N, num_splats, 3) for 3D positions
+    # Centroids are already in shape (N, num_splats, 3) from decode_splats
+    # No need to reshape
     n_samples = centroids.shape[0]
-    num_splats = sigmas.shape[1]
-    centroids = centroids.reshape(n_samples, num_splats, 3)
+    num_splats = centroids.shape[1]
     
     # Apply coordinate permutation fix
     # The meshgrid with indexing="xy" creates a cyclic permutation:
@@ -135,31 +140,18 @@ def _extract_segmented_splats(
     pose: torch.Tensor,
     global_weight: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Extract splats from SegmentedGaussianSplatDecoder."""
-    # Split latent based on decoder's configuration
-    affinity_segment_size = decoder.affinity_segment_size
-    free_segment_size = decoder.free_segment_size
+    """Extract splats from SegmentedGaussianSplatDecoder with pose applied.
     
-    mu_affinity = mu[:, :affinity_segment_size]
-    mu_free = mu[:, affinity_segment_size:]
+    Note: For SegmentedGaussianSplatDecoder, we should use the decode_splats method
+    which properly handles pose application (only to affinity segment).
+    """
+    # Use the decoder's decode_splats method which handles pose correctly
+    # The SegmentedGaussianSplatDecoder applies pose only to affinity segment
+    centroids, sigmas, weights = decoder.decode_splats(mu, pose, global_weight, for_visualization=True)
     
-    # Get affinity centroids
-    affinity_centroids = decoder.affinity_centroids(mu_affinity)
-    free_centroids = decoder.free_centroids(mu_free)
-    centroids = torch.cat([affinity_centroids, free_centroids], dim=1)
-    
-    # Get sigmas
-    affinity_sigmas = decoder.affinity_sigmas(mu_affinity)
-    free_sigmas = decoder.free_sigmas(mu_free)
-    sigmas = torch.cat([affinity_sigmas, free_sigmas], dim=1)
-    
-    # Get weights
-    affinity_weights = decoder.affinity_weights(mu_affinity)
-    free_weights = decoder.free_weights(mu_free)
-    weights = torch.cat([affinity_weights, free_weights], dim=1)
-    
-    # Apply global weight scaling
-    weights = weights * global_weight
+    # The decode_splats returns splats in shape [batch, 3, num_splats]
+    # We need to reshape to [batch, num_splats, 3] for consistency
+    centroids = centroids.transpose(1, 2)
     
     return centroids, sigmas, weights
 
@@ -170,13 +162,19 @@ def _extract_standard_splats(
     pose: torch.Tensor,
     global_weight: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Extract splats from standard GaussianSplatDecoder."""
-    centroids = decoder.centroids(mu)
-    sigmas = decoder.sigmas(mu)
-    weights = decoder.weights(mu)
+    """Extract splats from standard GaussianSplatDecoder with pose applied.
+    
+    Note: We use the decoder's decode_splats method to properly apply pose rotation.
+    """
+    # Use the decoder's decode_splats method which handles pose rotation
+    centroids, sigmas, weights = decoder.decode_splats(mu, pose)
     
     # Apply global weight scaling
     weights = weights * global_weight
+    
+    # The decode_splats returns splats in shape [batch, 3, num_splats]
+    # We need to reshape to [batch, num_splats, 3] for consistency
+    centroids = centroids.transpose(1, 2)
     
     return centroids, sigmas, weights
 
