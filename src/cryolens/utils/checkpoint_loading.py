@@ -368,11 +368,16 @@ def load_vae_model(
     # Remove coordinate buffers for compatibility
     # The coords buffer can have different sizes depending on padding configurations
     # between training and inference. It's safer to let it be recreated.
-    coords_keys = [k for k in state_dict.keys() if 'coords' in k.lower()]
-    if coords_keys:
-        logger.info(f"Removing coordinate buffers for compatibility: {coords_keys}")
-        for key in coords_keys:
-            del state_dict[key]
+    coords_keys = [k for k in state_dict.keys() if 'coords' in k.lower() or '_splatter' in k.lower() and 'coords' in k.lower()]
+    # Also look for any splatter-related coordinate buffers
+    splatter_coord_keys = [k for k in state_dict.keys() if '_splatter.coords' in k or 'splatter.coords' in k]
+    all_coord_keys = list(set(coords_keys + splatter_coord_keys))
+    
+    if all_coord_keys:
+        logger.info(f"Removing coordinate buffers for compatibility: {all_coord_keys}")
+        for key in all_coord_keys:
+            if key in state_dict:
+                del state_dict[key]
     
     # Start with default configuration
     config = {
