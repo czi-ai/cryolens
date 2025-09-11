@@ -117,7 +117,16 @@ def extract_gaussian_splats(
     num_splats = sigmas.shape[1]
     centroids = centroids.reshape(n_samples, num_splats, 3)
     
-    return centroids, sigmas, weights, embeddings
+    # Apply coordinate permutation fix
+    # The meshgrid with indexing="xy" creates a cyclic permutation:
+    # Splat X -> Volume Y, Splat Y -> Volume Z, Splat Z -> Volume X
+    # This corrects the coordinate mapping for proper visualization
+    centroids_fixed = centroids.copy()
+    centroids_fixed[:, :, 0] = centroids[:, :, 1]  # Splat Y -> dim 0 (Z in volume)
+    centroids_fixed[:, :, 1] = centroids[:, :, 0]  # Splat X -> dim 1 (Y in volume)
+    centroids_fixed[:, :, 2] = centroids[:, :, 2]  # Splat Z -> dim 2 (X in volume)
+    
+    return centroids_fixed, sigmas, weights, embeddings
 
 
 def _extract_segmented_splats(
