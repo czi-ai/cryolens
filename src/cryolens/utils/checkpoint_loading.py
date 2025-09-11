@@ -365,19 +365,26 @@ def load_vae_model(
     else:
         state_dict = checkpoint_state
     
-    # Remove coordinate buffers for compatibility
+    # Remove coordinate buffers and any renderer state for compatibility
     # The coords buffer can have different sizes depending on padding configurations
     # between training and inference. It's safer to let it be recreated.
-    coords_keys = [k for k in state_dict.keys() if 'coords' in k.lower() or '_splatter' in k.lower() and 'coords' in k.lower()]
-    # Also look for any splatter-related coordinate buffers
-    splatter_coord_keys = [k for k in state_dict.keys() if '_splatter.coords' in k or 'splatter.coords' in k]
-    all_coord_keys = list(set(coords_keys + splatter_coord_keys))
+    keys_to_remove = []
+    for key in state_dict.keys():
+        # Remove any coordinate-related buffers
+        if 'coords' in key.lower():
+            keys_to_remove.append(key)
+        # Remove any splatter/renderer internal state
+        elif '_splatter' in key and ('coords' in key or 'grid' in key or 'meshgrid' in key):
+            keys_to_remove.append(key)
+        # Specifically target decoder splatter coords
+        elif 'decoder._splatter.coords' in key:
+            keys_to_remove.append(key)
     
-    if all_coord_keys:
-        logger.info(f"Removing coordinate buffers for compatibility: {all_coord_keys}")
-        for key in all_coord_keys:
-            if key in state_dict:
-                del state_dict[key]
+    if keys_to_remove:
+        logger.info(f"Removing {len(keys_to_remove)} coordinate/renderer buffers for compatibility")
+        logger.debug(f"Keys being removed: {keys_to_remove}")
+        for key in keys_to_remove:
+            del state_dict[key]
     
     # Start with default configuration
     config = {
