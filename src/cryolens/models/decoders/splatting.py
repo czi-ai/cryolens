@@ -38,7 +38,7 @@ class GaussianSplatRenderer(BaseDecoder):
         # Create coordinate grid and register as buffer for proper device management
         grids = torch.meshgrid(
             *[torch.linspace(-1, 1, sz) for sz in shape],
-            indexing="xy",
+            indexing="ij",
         )
 
         # Add zeros for z if we have a 2d grid
@@ -47,7 +47,8 @@ class GaussianSplatRenderer(BaseDecoder):
 
         # Stack coordinates and reshape for efficient computation
         # Shape: [1, num_points, 3]
-        coords = torch.stack([torch.ravel(grid) for grid in grids], axis=0).transpose(0, 1).unsqueeze(0)
+        # Stack in [X, Y, Z] order when using indexing="ij"
+        coords = torch.stack([torch.ravel(grids[2]), torch.ravel(grids[1]), torch.ravel(grids[0])], axis=0).transpose(0, 1).unsqueeze(0)
         self.register_buffer('coords', coords)
 
     def forward(
