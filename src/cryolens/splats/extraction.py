@@ -117,19 +117,14 @@ def extract_gaussian_splats(
     num_splats = sigmas.shape[1]
     centroids = centroids.reshape(n_samples, num_splats, 3)
     
-    # Transform from normalized [-1, 1] space to voxel space
-    # The centroids are in normalized space for the PADDED volume
+    # The centroids from the networks are in normalized [-1, 1] space
+    # Convert to voxel coordinates [0, 48] for a standard 48x48x48 volume
     decoder = model.decoder
     volume_shape = decoder._shape if hasattr(decoder, '_shape') else (48, 48, 48)
-    renderer_padding = decoder._padding if hasattr(decoder, '_padding') else 9
-    padded_shape = tuple(s + 2 * renderer_padding for s in volume_shape)
     
-    # Convert from normalized [-1, 1] to padded voxel coordinates
+    # Convert from normalized to voxel space
     for i in range(3):
-        centroids[:, :, i] = (centroids[:, :, i] + 1.0) * (padded_shape[i] / 2.0)
-    
-    # Subtract padding to get coordinates in original volume space
-    centroids -= renderer_padding
+        centroids[:, :, i] = (centroids[:, :, i] + 1.0) * (volume_shape[i] / 2.0)
     
     # Apply coordinate permutation fix
     # The meshgrid with indexing="xy" creates a cyclic permutation:
