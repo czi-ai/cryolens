@@ -365,6 +365,15 @@ def load_vae_model(
     else:
         state_dict = checkpoint_state
     
+    # Remove coordinate buffers for compatibility
+    # The coords buffer can have different sizes depending on padding configurations
+    # between training and inference. It's safer to let it be recreated.
+    coords_keys = [k for k in state_dict.keys() if 'coords' in k.lower()]
+    if coords_keys:
+        logger.info(f"Removing coordinate buffers for compatibility: {coords_keys}")
+        for key in coords_keys:
+            del state_dict[key]
+    
     # Start with default configuration
     config = {
         'box_size': 48,  # Default
@@ -449,8 +458,11 @@ def load_vae_model(
     # Load weights
     missing_keys, unexpected_keys = vae.load_state_dict(state_dict, strict=strict_loading)
     
+    # Filter out coords from missing keys since we deliberately removed them
+    missing_keys = [k for k in missing_keys if 'coords' not in k.lower()]
+    
     if missing_keys:
-        logger.debug(f"Missing keys: {len(missing_keys)}")
+        logger.debug(f"Missing keys (excluding coords): {len(missing_keys)}")
     if unexpected_keys:
         logger.debug(f"Unexpected keys: {len(unexpected_keys)}")
     
