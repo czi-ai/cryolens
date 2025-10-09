@@ -80,6 +80,8 @@ def get_copick_config(config_name):
     # Map config names to files
     config_files = {
         "mlc_experimental_publictest": "mlc_experimental_publictest.json",
+        "mlc_experimental_privatetest": "mlc_experimental_privatetest.json",
+        "mlc_experimental_training": "mlc_experimental_training.json",
         "training_synthetic": "training_synthetic.json",
     }
     
@@ -124,7 +126,11 @@ def list_available_configs():
     """
     return {
         "mlc_experimental_publictest": 
-            "ML Challenge experimental test set (6 structures, OOD)",
+            "ML Challenge experimental public test set (6 structures, OOD)",
+        "mlc_experimental_privatetest": 
+            "ML Challenge experimental private test set (OOD)",
+        "mlc_experimental_training": 
+            "ML Challenge experimental training set",
         "training_synthetic": 
             "Synthetic training dataset (104 structures, in-distribution)",
     }
