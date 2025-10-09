@@ -102,13 +102,10 @@ def extract_particles_from_run(
         points = all_points
     
     # Get tomogram for this voxel spacing
-    voxel_spacings = run.get_voxel_spacings()
-    
-    # Find closest voxel spacing
-    closest_vs = min(voxel_spacings, key=lambda vs: abs(vs.voxel_size - voxel_spacing))
+    closest_vs = run.get_voxel_spacing(voxel_spacing)
     
     # Get tomogram (prefer denoised/processed if available)
-    tomograms = closest_vs.get_tomograms()
+    tomograms = closest_vs.tomograms
     if not tomograms:
         print(f"Warning: No tomograms found for run {run.name} at voxel spacing {closest_vs.voxel_size}")
         return np.array([]), np.array([]), None
