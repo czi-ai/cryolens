@@ -28,7 +28,24 @@ This will:
 - Extract 30 ribosome particles
 - Save them as `./example_data/ribosome_particles.zarr/`
 
-### 2. Extract Multiple Structures
+### 2. Reconstruct Particles
+
+Reconstruct extracted particles using CryoLens:
+
+```bash
+python examples/reconstruct_particles.py \
+    --particles ./example_data/ribosome_particles.zarr \
+    --checkpoint-epoch 2600 \
+    --output ./reconstructions/
+```
+
+This will:
+- Load the pre-trained CryoLens model (epoch 2600)
+- Reconstruct all particles
+- Save mean reconstruction as MRC file
+- Generate FSC curve if ground truth provided
+
+### 3. Extract Multiple Structures
 
 ```bash
 python examples/extract_copick_particles.py \
@@ -49,6 +66,39 @@ python examples/extract_copick_particles.py \
 ```
 
 ## Available Examples
+
+### `reconstruct_particles.py`
+Reconstruct particles using pre-trained CryoLens model.
+
+**Features:**
+- Automatic checkpoint fetching via pooch
+- Batch reconstruction with GPU support
+- Uncertainty estimation with multiple samples
+- FSC calculation with ground truth
+- Saves MRC files and analysis plots
+
+**Usage:**
+```bash
+python examples/reconstruct_particles.py --help
+```
+
+**Example with uncertainty estimation:**
+```bash
+python examples/reconstruct_particles.py \
+    --particles ./example_data/ribosome_particles.zarr \
+    --checkpoint-epoch 2600 \
+    --num-samples 10 \
+    --output ./reconstructions/
+```
+
+**Example with FSC analysis:**
+```bash
+python examples/reconstruct_particles.py \
+    --particles ./example_data/ribosome_particles.zarr \
+    --checkpoint-epoch 2600 \
+    --ground-truth ./references/ribosome.mrc \
+    --output ./reconstructions/
+```
 
 ### `extract_copick_particles.py`
 Extract particle subvolumes from Copick projects.
@@ -83,6 +133,36 @@ from cryolens.data import list_available_configs
 configs = list_available_configs()
 for name, desc in configs.items():
     print(f"{name}: {desc}")
+```
+
+## Reconstruction Output Format
+
+Reconstructions are saved with the following structure:
+
+```
+reconstructio ns/ribosome/
+├── ribosome_mean_reconstruction.mrc    # Mean reconstruction
+├── ribosome_uncertainty.mrc            # Uncertainty map (if num-samples > 1)
+├── ribosome_fsc.png                     # FSC curve plot (if ground truth provided)
+├── ribosome_fsc.npz                     # FSC data (if ground truth provided)
+└── ribosome_summary.json                # Reconstruction metadata
+```
+
+Load reconstructions in Python:
+```python
+import mrcfile
+import json
+
+# Load reconstruction
+with mrcfile.open('reconstructions/ribosome/ribosome_mean_reconstruction.mrc') as mrc:
+    reconstruction = mrc.data
+    voxel_size = mrc.voxel_size.x
+
+# Load summary
+with open('reconstructions/ribosome/ribosome_summary.json') as f:
+    summary = json.load(f)
+    
+print(f"Resolution (FSC=0.5): {summary.get('resolution_at_fsc05', 'N/A')} Å")
 ```
 
 ## Output Format
@@ -139,8 +219,8 @@ The specified voxel spacing may not be available. Try `--voxel-spacing 10.0` (de
 
 ## Next Steps
 
-After extracting particles, you can:
-1. Run reconstructions with CryoLens (see future examples)
-2. Perform alignment and averaging
-3. Calculate FSC curves
-4. Analyze embeddings
+Complete workflow:
+1. Extract particles with `extract_copick_particles.py`
+2. Reconstruct with `reconstruct_particles.py`
+3. Analyze results (FSC curves, uncertainty maps)
+4. Use interactive picking with napari-cryolens (see PR #4)
