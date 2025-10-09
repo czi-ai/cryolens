@@ -26,7 +26,7 @@
             "map_threshold": 0.035
         },
         {
-            "name": "beta-galactoside",
+            "name": "beta-galactosidase",
             "go_id": "UniProtKB:P00722",
             "is_particle": true,
             "pdb_id": "6X1Q",
