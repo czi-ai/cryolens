@@ -323,12 +323,16 @@ def main():
     print(f"Loading Copick project from: {config_path}")
     root = copick.from_file(config_path)
     
-    # Get runs
+    # Get runs and randomize order
     runs = root.runs
     if run_filter:
         runs = [r for r in runs if r.name in run_filter]
     
-    print(f"Found {len(runs)} runs to process")
+    # Randomize run order for diverse sampling
+    import random
+    random.shuffle(runs)
+    
+    print(f"Found {len(runs)} runs to process (randomized order)")
     
     # Extract particles for each structure
     output_base = Path(args.output)
@@ -344,7 +348,12 @@ def main():
         all_orientations = []
         run_info = []
         
+        # Collect all available particles from all runs first
         for run in runs:
+            # Stop if we have enough particles
+            if len(all_particles) > 0 and sum(len(p) for p in all_particles) >= args.num_particles:
+                break
+            
             print(f"\nProcessing run: {run.name}")
             
             particles, positions, orientations = extract_particles_from_run(
@@ -352,7 +361,7 @@ def main():
                 object_name=structure,
                 voxel_spacing=args.voxel_spacing,
                 box_size=args.box_size,
-                max_particles=args.num_particles,
+                max_particles=None,  # Extract all available particles from each run
                 user_id=args.user_id,
                 session_id=args.session_id,
             )
@@ -376,6 +385,19 @@ def main():
         all_particles = np.concatenate(all_particles, axis=0)
         all_positions = np.concatenate(all_positions, axis=0)
         all_orientations = np.concatenate(all_orientations, axis=0) if all_orientations else None
+        
+        print(f"\nCollected {len(all_particles)} total particles from {len(run_info)} runs")
+        
+        # Randomly sample if we have more than requested
+        if len(all_particles) > args.num_particles:
+            print(f"Randomly sampling {args.num_particles} particles from {len(all_particles)} total")
+            indices = np.random.choice(len(all_particles), args.num_particles, replace=False)
+            indices = np.sort(indices)  # Sort to maintain some spatial coherence
+            
+            all_particles = all_particles[indices]
+            all_positions = all_positions[indices]
+            if all_orientations is not None:
+                all_orientations = all_orientations[indices]
         
         # Prepare metadata
         metadata = {
