@@ -1,0 +1,1365 @@
+{
+  "config_type": "filesystem",
+  "name": "Synthetic CryoET Dataset",
+  "description": "Polnet-generated synthetic tomograms",
+  "version": "0.1.0",
+  "pickable_objects": [
+    {
+      "name": "membrane",
+      "label": 1,
+      "color": [
+        204,
+        204,
+        51,
+        255
+      ],
+      "radius": 0,
+      "is_particle": false
+    },
+    {
+      "name": "1g3i",
+      "pdb_id": "1G3I",
+      "label": 2,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "1n9g",
+      "pdb_id": "1N9G",
+      "label": 3,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "1ss8",
+      "pdb_id": "1SS8",
+      "label": 4,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "1ul1",
+      "pdb_id": "1UL1",
+      "label": 5,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "2dfs",
+      "pdb_id": "2DFS",
+      "label": 6,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "2r9r",
+      "pdb_id": "2R9R",
+      "label": 7,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "2rhs",
+      "pdb_id": "2RHS",
+      "label": 8,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "2vz9",
+      "pdb_id": "2VZ9",
+      "label": 9,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "2ww2",
+      "pdb_id": "2WW2",
+      "label": 10,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "2xnx",
+      "pdb_id": "2XNX",
+      "label": 11,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "3lue",
+      "pdb_id": "3LUE",
+      "label": 12,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "3mkq",
+      "pdb_id": "3MKQ",
+      "label": 13,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "3ulv",
+      "pdb_id": "3ULV",
+      "label": 14,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "4uic",
+      "pdb_id": "4UIC",
+      "label": 15,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "4wrm",
+      "pdb_id": "4WRM",
+      "label": 16,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "4xk8",
+      "pdb_id": "4XK8",
+      "label": 17,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5a20",
+      "pdb_id": "5A20",
+      "label": 18,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5csa",
+      "pdb_id": "5CSA",
+      "label": 19,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5g04",
+      "pdb_id": "5G04",
+      "label": 20,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5h0s",
+      "pdb_id": "5H0S",
+      "label": 21,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5jh9",
+      "pdb_id": "5JH9",
+      "label": 22,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5ljo",
+      "pdb_id": "5LJO",
+      "label": 23,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5o32",
+      "pdb_id": "5O32",
+      "label": 24,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5ool",
+      "pdb_id": "5OOL",
+      "label": 25,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "5vkq",
+      "pdb_id": "5VKQ",
+      "label": 26,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6ahu",
+      "pdb_id": "6AHU",
+      "label": 27,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6bq1",
+      "pdb_id": "6BQ1",
+      "label": 28,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6ces",
+      "pdb_id": "6CES",
+      "label": 29,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6cnj",
+      "pdb_id": "6CNJ",
+      "label": 30,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6duz",
+      "pdb_id": "6DUZ",
+      "label": 31,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6emk",
+      "pdb_id": "6EMK",
+      "label": 32,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6f8l",
+      "pdb_id": "6F8L",
+      "label": 33,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6gy6",
+      "pdb_id": "6GY6",
+      "label": 34,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6gym",
+      "pdb_id": "6GYM",
+      "label": 35,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6i0d",
+      "pdb_id": "6I0D",
+      "label": 36,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6id1",
+      "pdb_id": "6ID1",
+      "label": 37,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6jy0",
+      "pdb_id": "6JY0",
+      "label": 38,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6klh",
+      "pdb_id": "6KLH",
+      "label": 39,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6krk",
+      "pdb_id": "6KRK",
+      "label": 40,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6ksp",
+      "pdb_id": "6KSP",
+      "label": 41,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6lmt",
+      "pdb_id": "6LMT",
+      "label": 42,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6lx3",
+      "pdb_id": "6LX3",
+      "label": 43,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6lxk",
+      "pdb_id": "6LXK",
+      "label": 44,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6lxv",
+      "pdb_id": "6LXV",
+      "label": 45,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6m04",
+      "pdb_id": "6M04",
+      "label": 46,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6mrc",
+      "pdb_id": "6MRC",
+      "label": 47,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6pif",
+      "pdb_id": "6PIF",
+      "label": 48,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6ta5",
+      "pdb_id": "6TA5",
+      "label": 49,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6tav",
+      "pdb_id": "6TAV",
+      "label": 50,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6tps",
+      "pdb_id": "6TPS",
+      "label": 51,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6u8q",
+      "pdb_id": "6U8Q",
+      "label": 52,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6up6",
+      "pdb_id": "6UP6",
+      "label": 53,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6vgr",
+      "pdb_id": "6VGR",
+      "label": 54,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6vn1",
+      "pdb_id": "6VN1",
+      "label": 55,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6vz8",
+      "pdb_id": "6VZ8",
+      "label": 56,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6w6m",
+      "pdb_id": "6W6M",
+      "label": 57,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6wzt",
+      "pdb_id": "6WZT",
+      "label": 58,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6x5z",
+      "pdb_id": "6X5Z",
+      "label": 59,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6xf8",
+      "pdb_id": "6XF8",
+      "label": 60,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6yt5",
+      "pdb_id": "6YT5",
+      "label": 61,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6z3a",
+      "pdb_id": "6Z3A",
+      "label": 62,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6z6o",
+      "pdb_id": "6Z6O",
+      "label": 63,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6z80",
+      "pdb_id": "6Z80",
+      "label": 64,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6ziu",
+      "pdb_id": "6ZIU",
+      "label": 65,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "6zqj",
+      "pdb_id": "6ZQJ",
+      "label": 66,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7amv",
+      "pdb_id": "7AMV",
+      "label": 67,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7b5s",
+      "pdb_id": "7B5S",
+      "label": 68,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7b7u",
+      "pdb_id": "7B7U",
+      "label": 69,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7bkc",
+      "pdb_id": "7BKC",
+      "label": 70,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7blq",
+      "pdb_id": "7BLQ",
+      "label": 71,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7blr",
+      "pdb_id": "7BLR",
+      "label": 72,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7dd9",
+      "pdb_id": "7DD9",
+      "label": 73,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7e1y",
+      "pdb_id": "7E1Y",
+      "label": 74,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7e6g",
+      "pdb_id": "7E6G",
+      "label": 75,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7e8h",
+      "pdb_id": "7E8H",
+      "label": 76,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7eep",
+      "pdb_id": "7EEP",
+      "label": 77,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7egd",
+      "pdb_id": "7EGD",
+      "label": 78,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7ege",
+      "pdb_id": "7EGE",
+      "label": 79,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7egq",
+      "pdb_id": "7EGQ",
+      "label": 80,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7etm",
+      "pdb_id": "7ETM",
+      "label": 81,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7ey7",
+      "pdb_id": "7EY7",
+      "label": 82,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7jsn",
+      "pdb_id": "7JSN",
+      "label": 83,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7k5x",
+      "pdb_id": "7K5X",
+      "label": 84,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7kdv",
+      "pdb_id": "7KDV",
+      "label": 85,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7kfe",
+      "pdb_id": "7KFE",
+      "label": 86,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7kj2",
+      "pdb_id": "7KJ2",
+      "label": 87,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7mei",
+      "pdb_id": "7MEI",
+      "label": 88,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7nhs",
+      "pdb_id": "7NHS",
+      "label": 89,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7niu",
+      "pdb_id": "7NIU",
+      "label": 90,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7nyz",
+      "pdb_id": "7NYZ",
+      "label": 91,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7o01",
+      "pdb_id": "7O01",
+      "label": 92,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7q21",
+      "pdb_id": "7Q21",
+      "label": 93,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7qj0",
+      "pdb_id": "7QJ0",
+      "label": 94,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7r04",
+      "pdb_id": "7R04",
+      "label": 95,
+      "color": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7s7k",
+      "pdb_id": "7S7K",
+      "label": 96,
+      "color": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7sfw",
+      "pdb_id": "7SFW",
+      "label": 97,
+      "color": [
+        0,
+        255,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7sgm",
+      "pdb_id": "7SGM",
+      "label": 98,
+      "color": [
+        255,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7shk",
+      "pdb_id": "7SHK",
+      "label": 99,
+      "color": [
+        128,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7sn7",
+      "pdb_id": "7SN7",
+      "label": 100,
+      "color": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7t3u",
+      "pdb_id": "7T3U",
+      "label": 101,
+      "color": [
+        128,
+        128,
+        128,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7vtq",
+      "pdb_id": "7VTQ",
+      "label": 102,
+      "color": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7wbt",
+      "pdb_id": "7WBT",
+      "label": 103,
+      "color": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    },
+    {
+      "name": "7woo",
+      "pdb_id": "7WOO",
+      "label": 104,
+      "color": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "radius": 50,
+      "is_particle": true
+    }
+  ],
+  "overlay_root": "local:///cryolens_data/dataset_003/overlay",
+  "overlay_fs_args": {
+    "auto_mkdir": true
+  },
+  "user_id": "polnet-generator",
+  "session_id": "synthetic"
+}
