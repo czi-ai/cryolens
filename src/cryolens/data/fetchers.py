@@ -42,9 +42,28 @@ def fetch_checkpoint(version="v1", epoch=2600, progressbar=True):
     -----
     Checkpoints are cached in the pooch cache directory. Use
     ``pooch.os_cache("cryolens")`` to find the cache location.
+    
+    If the checkpoint file already exists in the cache, it will be used
+    without verification (no hash checking during development).
     """
     filename = f"checkpoints/cryolens-{version}-epoch{epoch}.ckpt"
-    return CRYOLENS_POOCH.fetch(filename, progressbar=progressbar)
+    cache_path = Path(pooch.os_cache("cryolens")) / filename
+    
+    # If file exists in cache, return it without hash checking
+    if cache_path.exists():
+        return str(cache_path)
+    
+    # Otherwise, try to fetch (will fail if not hosted yet)
+    try:
+        return CRYOLENS_POOCH.fetch(filename, progressbar=progressbar)
+    except Exception as e:
+        # Provide helpful error message
+        raise FileNotFoundError(
+            f"Checkpoint not found in cache or online.\n"
+            f"Expected location: {cache_path}\n"
+            f"To use a local checkpoint, copy it to the above location.\n"
+            f"Original error: {e}"
+        )
 
 
 def get_copick_config(config_name):
