@@ -1,6 +1,20 @@
 """
+
+# Import fetcher functions
+from .fetchers import (
+    fetch_checkpoint,
+    get_copick_config,
+    list_available_configs,
+)
 CryoLens data loading utilities.
 """
+
+# Import fetcher functions
+from .fetchers import (
+    fetch_checkpoint,
+    get_copick_config,
+    list_available_configs,
+)
 
 # Import parquet loader functions
 from .parquet_loader import (
@@ -21,6 +35,10 @@ try:
         COPICK_AVAILABLE
     )
     __all__ = [
+        # Fetcher functions
+        "fetch_checkpoint",
+        "get_copick_config",
+        "list_available_configs",
         # Parquet loader functions
         "extract_volume_from_row",
         "extract_pose_from_row",
@@ -37,6 +55,10 @@ try:
 except ImportError:
     COPICK_AVAILABLE = False
     __all__ = [
+        # Fetcher functions
+        "fetch_checkpoint",
+        "get_copick_config",
+        "list_available_configs",
         # Parquet loader functions
         "extract_volume_from_row",
         "extract_pose_from_row",
