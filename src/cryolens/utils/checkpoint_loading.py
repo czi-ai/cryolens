@@ -249,15 +249,26 @@ def infer_config_from_checkpoint(state_dict: Dict[str, torch.Tensor], checkpoint
         config['latent_dims'] = state_dict['mu.bias'].shape[0]
         logger.debug(f"Detected latent_dims = {config['latent_dims']}")
     
-    # Determine splat configuration
+    # Determine splat configuration by finding the FINAL output layers
     affinity_splats = None
     free_splats = None
     
-    for key, value in state_dict.items():
-        if 'decoder.affinity_weights.0.bias' in key:
-            affinity_splats = value.shape[0]
-        elif 'decoder.free_weights.0.bias' in key:
-            free_splats = value.shape[0]
+    # Look for the highest numbered layer (final output)
+    max_affinity_layer = -1
+    max_free_layer = -1
+    
+    for key in state_dict.keys():
+        if 'decoder.affinity_weights.' in key and '.bias' in key:
+            # Extract layer number
+            layer_num = int(key.split('.')[2])
+            if layer_num > max_affinity_layer:
+                max_affinity_layer = layer_num
+                affinity_splats = state_dict[key].shape[0]
+        elif 'decoder.free_weights.' in key and '.bias' in key:
+            layer_num = int(key.split('.')[2])
+            if layer_num > max_free_layer:
+                max_free_layer = layer_num
+                free_splats = state_dict[key].shape[0]
     
     if affinity_splats is not None and free_splats is not None:
         config['num_splats'] = affinity_splats + free_splats
