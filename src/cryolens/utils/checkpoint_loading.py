@@ -386,44 +386,40 @@ def load_vae_model(
         for key in keys_to_remove:
             del state_dict[key]
     
-    # Start with default configuration
+    # Infer configuration from checkpoint FIRST, before any model creation
+    inferred_config = infer_config_from_checkpoint(state_dict, checkpoint_path)
+    
+    # Start with defaults, then apply inferred values
     config = {
-        'box_size': 48,  # Default
-        'latent_dims': 16,
-        'num_splats': 768,
-        'latent_ratio': 0.75,
+        'box_size': 48,
+        'latent_dims': inferred_config.get('latent_dims', 16),
+        'num_splats': inferred_config.get('num_splats', 768),
+        'latent_ratio': inferred_config.get('latent_ratio', 0.75),
         'splat_sigma_range': (0.005, 0.1),
         'pose_dims': 4,
         'use_rotated_affinity': False,
         'normalization': 'z-score'
     }
     
-    # Load or infer configuration
+    # Load or override with training parameters if available
     if load_config:
         loaded_params = load_training_parameters(checkpoint_path)
         if loaded_params:
-            # Update config with loaded parameters, keeping defaults for missing keys
-            for key in config.keys():
-                if key in loaded_params:
-                    config[key] = loaded_params[key]
-            # Also add any extra parameters from the loaded config
+            # Update config with loaded parameters
             for key, value in loaded_params.items():
-                if key not in config:
-                    config[key] = value
+                config[key] = value
+            logger.info(f"Applied training parameters from config file")
+        else:
+            # Use inferred config
+            logger.info(f"Using inferred config: latent_dims={config['latent_dims']}, "
+                       f"num_splats={config['num_splats']}, latent_ratio={config['latent_ratio']:.3f}")
     
-    # Now infer any missing values from the checkpoint
-    inferred_config = infer_config_from_checkpoint(state_dict, checkpoint_path)
-    
-    # Update config with inferred values only if they weren't loaded from file
-    for key, value in inferred_config.items():
-        if key not in config or (loaded_params is None and key in ['latent_dims', 'num_splats', 'latent_ratio']):
-            config[key] = value
-    
-    # Validate configuration against checkpoint
+    # Final validation against checkpoint
     if 'mu.bias' in state_dict:
         latent_dims_from_checkpoint = state_dict['mu.bias'].shape[0]
         if latent_dims_from_checkpoint != config['latent_dims']:
-            logger.warning(f"Config latent_dims={config['latent_dims']} but checkpoint has {latent_dims_from_checkpoint}")
+            logger.warning(f"Overriding config latent_dims={config['latent_dims']} "
+                          f"with checkpoint value {latent_dims_from_checkpoint}")
             config['latent_dims'] = latent_dims_from_checkpoint
     
     # Create model components
