@@ -182,44 +182,51 @@ def calculate_fsc(
         volume1 = volume1 * mask
         volume2 = volume2 * mask
     
-    # Compute 3D FFT
-    fft1 = np.fft.fftshift(np.fft.fftn(volume1))
-    fft2 = np.fft.fftshift(np.fft.fftn(volume2))
+    # Compute 3D FFT (non-shifted)
+    fft1 = np.fft.fftn(volume1)
+    fft2 = np.fft.fftn(volume2)
     
     # Get volume dimensions
     nz, ny, nx = volume1.shape
     
-    # Create frequency grid
-    z_freq = np.fft.fftshift(np.fft.fftfreq(nz))
-    y_freq = np.fft.fftshift(np.fft.fftfreq(ny))
-    x_freq = np.fft.fftshift(np.fft.fftfreq(nx))
+    # Create index grids in real space
+    z_idx = np.arange(nz)
+    y_idx = np.arange(ny)
+    x_idx = np.arange(x)
     
-    # Create 3D meshgrid
-    fz, fy, fx = np.meshgrid(z_freq, y_freq, x_freq, indexing='ij')
+    # Create 3D meshgrid of indices
+    zz, yy, xx = np.meshgrid(z_idx, y_idx, x_idx, indexing='ij')
     
-    # Calculate radial frequency (in units of 1/pixel)
-    freq_radius = np.sqrt(fx**2 + fy**2 + fz**2)
+    # Calculate distance from DC component (corner of FFT)
+    # In non-shifted FFT, DC is at (0, 0, 0)
+    # For indices >= N/2, they represent negative frequencies
+    # Distance in frequency space
+    zz_freq = np.where(zz < nz//2, zz, zz - nz)
+    yy_freq = np.where(yy < ny//2, yy, yy - ny)
+    xx_freq = np.where(xx < nx//2, xx, xx - nx)
     
-    # Maximum frequency is Nyquist
-    max_freq = 0.5
+    # Radial distance in frequency space (units: pixels in frequency domain)
+    freq_radius = np.sqrt(zz_freq**2 + yy_freq**2 + xx_freq**2)
     
-    # Create radial bins
-    n_bins = min(volume1.shape) // 2
-    freq_bins = np.linspace(0, max_freq, n_bins + 1)
+    # Maximum useful radius is Nyquist (half the grid)
+    max_radius = min(nz, ny, nx) // 2
+    
+    # Create bins for radial shells
+    radius_bins = np.arange(0, max_radius + 1)
     
     # Calculate FSC for each shell
-    fsc = np.zeros(n_bins)
+    fsc = np.zeros(max_radius)
+    n_voxels_per_shell = np.zeros(max_radius)
     
-    for i in range(n_bins):
-        # Define shell
-        inner = freq_bins[i]
-        outer = freq_bins[i + 1]
+    for i in range(max_radius):
+        # Select voxels in this shell (radius i to i+1)
+        shell_mask = (freq_radius >= i) & (freq_radius < i + 1)
+        n_voxels = np.sum(shell_mask)
         
-        # Select voxels in this shell
-        shell_mask = (freq_radius >= inner) & (freq_radius < outer)
-        
-        if not np.any(shell_mask):
+        if n_voxels == 0:
             continue
+        
+        n_voxels_per_shell[i] = n_voxels
         
         # Get FFT values in this shell
         fft1_shell = fft1[shell_mask]
@@ -233,16 +240,21 @@ def calculate_fsc(
         if denom1 > 0 and denom2 > 0:
             fsc[i] = numerator / np.sqrt(denom1 * denom2)
     
-    # Convert frequency bins to resolution in Angstroms
-    # freq (1/pixel) * (1 pixel / voxel_size Angstrom) = 1/Angstrom
-    # resolution = 1 / freq
-    freq_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
+    # Convert pixel radius in frequency space to resolution in Angstroms
+    # frequency = radius_pixels / N_pixels
+    # resolution = 1 / frequency = N_pixels / radius_pixels
+    # resolution_angstroms = (N_pixels * voxel_size) / radius_pixels
     
-    # Avoid division by zero for DC component
-    freq_centers[0] = freq_bins[1] / 2 if freq_bins[1] > 0 else 1e-10
-    
-    # Convert to resolution in Angstroms: resolution = voxel_size / freq
-    resolution_angstroms = voxel_size / freq_centers
+    # For radius_pixels=0 (DC), set to a large value
+    resolution_angstroms = np.zeros(max_radius)
+    for i in range(max_radius):
+        if i == 0:
+            # DC component - infinite resolution
+            resolution_angstroms[i] = 1000.0  # Arbitrary large value
+        else:
+            # resolution (Angstroms) = box_size_angstroms / freq_radius_pixels
+            box_size_angstroms = nx * voxel_size
+            resolution_angstroms[i] = box_size_angstroms / i
     
     # Find resolution at FSC = 0.5
     idx_half = np.where(fsc < 0.5)[0]
@@ -252,11 +264,12 @@ def calculate_fsc(
         if idx > 0 and fsc[idx-1] > 0.5:
             # Interpolate
             frac = (0.5 - fsc[idx]) / (fsc[idx-1] - fsc[idx])
-            resolution_at_half = resolution_angstroms[idx] + frac * (resolution_angstroms[idx-1] - resolution_angstroms[idx])
+            resolution_at_half = resolution_angstroms[idx] - frac * (resolution_angstroms[idx] - resolution_angstroms[idx-1])
         else:
-            resolution_at_half = resolution_angstroms[idx]
+            resolution_at_half = resolution_angstroms[idx] if idx < len(resolution_angstroms) else resolution_angstroms[-1]
     else:
-        resolution_at_half = resolution_angstroms[-1]  # Better than Nyquist
+        # FSC never drops below 0.5 - report Nyquist
+        resolution_at_half = 2 * voxel_size
     
     return resolution_angstroms, fsc, resolution_at_half
 
