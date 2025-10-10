@@ -90,8 +90,38 @@ def normalize_volume_zscore(volume: np.ndarray) -> np.ndarray:
 
 
 def compute_3d_cross_correlation(vol1: np.ndarray, vol2: np.ndarray) -> np.ndarray:
-    """Compute 3D cross-correlation using FFT"""
+    """Compute 3D cross-correlation using FFT
+    
+    Parameters
+    ----------
+    vol1, vol2 : np.ndarray
+        3D volumes to compute cross-correlation. Must have same shape.
+        
+    Returns
+    -------
+    cross_corr : np.ndarray
+        Cross-correlation volume
+    """
     from scipy.fft import ifftn
+    
+    # Ensure volumes have the same shape
+    if vol1.shape != vol2.shape:
+        # Pad the smaller volume to match the larger one
+        target_shape = tuple(max(s1, s2) for s1, s2 in zip(vol1.shape, vol2.shape))
+        
+        def pad_to_shape(vol, target):
+            if vol.shape == target:
+                return vol
+            pad_width = []
+            for actual, target_dim in zip(vol.shape, target):
+                pad_before = (target_dim - actual) // 2
+                pad_after = target_dim - actual - pad_before
+                pad_width.append((pad_before, pad_after))
+            return np.pad(vol, pad_width, mode='constant', constant_values=0)
+        
+        vol1 = pad_to_shape(vol1, target_shape)
+        vol2 = pad_to_shape(vol2, target_shape)
+    
     fft1 = fftn(vol1)
     fft2 = fftn(vol2)
     cross_corr = np.real(ifftn(fft1 * np.conj(fft2)))
@@ -420,6 +450,24 @@ def save_results(
     # Process reconstructions with alignment if ground truth provided
     if ground_truth is not None:
         print("\nAligning reconstructions to ground truth...")
+        
+        # Ensure ground truth matches reconstruction size
+        recon_shape = mean_reconstructions[0].shape
+        if ground_truth.shape != recon_shape:
+            print(f"Ground truth shape {ground_truth.shape} != reconstruction shape {recon_shape}")
+            if all(gt_dim <= recon_dim for gt_dim, recon_dim in zip(ground_truth.shape, recon_shape)):
+                # Pad ground truth to match reconstruction size
+                pad_width = []
+                for gt_dim, recon_dim in zip(ground_truth.shape, recon_shape):
+                    pad_before = (recon_dim - gt_dim) // 2
+                    pad_after = recon_dim - gt_dim - pad_before
+                    pad_width.append((pad_before, pad_after))
+                ground_truth = np.pad(ground_truth, pad_width, mode='constant', constant_values=0)
+                print(f"Padded ground truth to {ground_truth.shape}")
+            else:
+                # Crop ground truth to match reconstruction size
+                ground_truth = crop_to_size(ground_truth, recon_shape)
+                print(f"Cropped ground truth to {ground_truth.shape}")
         
         # Normalize ground truth
         gt_normalized = normalize_volume_zscore(ground_truth)
