@@ -146,11 +146,11 @@ def calculate_fsc(
         
     Returns
     -------
-    frequencies : np.ndarray
-        Spatial frequencies (1/Angstrom)
+    resolution_angstroms : np.ndarray
+        Resolution in Angstroms for each shell
     fsc : np.ndarray
         FSC values
-    resolution : float
+    resolution_at_half : float
         Resolution at FSC=0.5 (Angstroms)
     """
     # Ensure volumes have the same size by cropping to smaller dimensions
@@ -163,11 +163,9 @@ def calculate_fsc(
             slices = tuple(slice(start, start + t) for start, t in zip(starts, target_shape))
             return volume[slices]
         
-        orig_shape1 = volume1.shape
-        orig_shape2 = volume2.shape
         volume1 = crop_center(volume1, target_shape)
         volume2 = crop_center(volume2, target_shape)
-        print(f"Cropped volumes for FSC: {orig_shape1} and {orig_shape2} -> {target_shape}")
+        print(f"Cropped volumes to {target_shape} for FSC")
     
     # Apply spherical mask if requested
     if mask_radius is not None:
@@ -175,58 +173,92 @@ def calculate_fsc(
         z, y, x = np.ogrid[:volume1.shape[0], :volume1.shape[1], :volume1.shape[2]]
         dist = np.sqrt((x - center[2])**2 + (y - center[1])**2 + (z - center[0])**2)
         
-        # Soft mask with Gaussian edge
-        edge_width = 5
-        mask = np.exp(-((dist - mask_radius) / edge_width)**2)
-        mask[dist <= mask_radius] = 1
-        mask[dist > mask_radius + 3*edge_width] = 0
+        # Soft Gaussian mask
+        edge_width = 3
+        mask = np.exp(-0.5 * ((dist - mask_radius) / edge_width)**2)
+        mask[dist <= mask_radius] = 1.0
+        mask[dist > mask_radius + 3*edge_width] = 0.0
         
         volume1 = volume1 * mask
         volume2 = volume2 * mask
     
-    # Fourier transform
-    fft1 = np.fft.fftn(volume1)
-    fft2 = np.fft.fftn(volume2)
+    # Compute 3D FFT
+    fft1 = np.fft.fftshift(np.fft.fftn(volume1))
+    fft2 = np.fft.fftshift(np.fft.fftn(volume2))
     
-    # Calculate radial distances
-    center = np.array(volume1.shape) // 2
-    z, y, x = np.ogrid[:volume1.shape[0], :volume1.shape[1], :volume1.shape[2]]
-    radius = np.sqrt((x - center[2])**2 + (y - center[1])**2 + (z - center[0])**2)
-    radius = radius.astype(int)
+    # Get volume dimensions
+    nz, ny, nx = volume1.shape
+    
+    # Create frequency grid
+    z_freq = np.fft.fftshift(np.fft.fftfreq(nz))
+    y_freq = np.fft.fftshift(np.fft.fftfreq(ny))
+    x_freq = np.fft.fftshift(np.fft.fftfreq(nx))
+    
+    # Create 3D meshgrid
+    fz, fy, fx = np.meshgrid(z_freq, y_freq, x_freq, indexing='ij')
+    
+    # Calculate radial frequency (in units of 1/pixel)
+    freq_radius = np.sqrt(fx**2 + fy**2 + fz**2)
+    
+    # Maximum frequency is Nyquist
+    max_freq = 0.5
+    
+    # Create radial bins
+    n_bins = min(volume1.shape) // 2
+    freq_bins = np.linspace(0, max_freq, n_bins + 1)
     
     # Calculate FSC for each shell
-    max_radius = min(center)
-    fsc = np.zeros(max_radius)
+    fsc = np.zeros(n_bins)
     
-    for r in range(max_radius):
-        mask_shell = (radius == r)
-        if not np.any(mask_shell):
+    for i in range(n_bins):
+        # Define shell
+        inner = freq_bins[i]
+        outer = freq_bins[i + 1]
+        
+        # Select voxels in this shell
+        shell_mask = (freq_radius >= inner) & (freq_radius < outer)
+        
+        if not np.any(shell_mask):
             continue
         
-        numerator = np.sum(fft1[mask_shell] * np.conj(fft2[mask_shell]))
-        denom1 = np.sum(np.abs(fft1[mask_shell])**2)
-        denom2 = np.sum(np.abs(fft2[mask_shell])**2)
+        # Get FFT values in this shell
+        fft1_shell = fft1[shell_mask]
+        fft2_shell = fft2[shell_mask]
+        
+        # Calculate correlation
+        numerator = np.abs(np.sum(fft1_shell * np.conj(fft2_shell)))
+        denom1 = np.sum(np.abs(fft1_shell)**2)
+        denom2 = np.sum(np.abs(fft2_shell)**2)
         
         if denom1 > 0 and denom2 > 0:
-            fsc[r] = np.abs(numerator) / np.sqrt(denom1 * denom2)
+            fsc[i] = numerator / np.sqrt(denom1 * denom2)
     
-    # Convert radius to spatial frequency
-    frequencies = np.arange(max_radius) / (volume1.shape[0] * voxel_size)
+    # Convert frequency bins to resolution in Angstroms
+    # freq (1/pixel) * (1 pixel / voxel_size Angstrom) = 1/Angstrom
+    # resolution = 1 / freq
+    freq_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
     
-    # Find resolution at FSC=0.5
-    crossing_idx = np.where(fsc < 0.5)[0]
-    if len(crossing_idx) > 0:
-        # Linear interpolation
-        idx = crossing_idx[0]
-        if idx > 0:
-            resolution = 1.0 / np.interp(0.5, [fsc[idx], fsc[idx-1]], 
-                                        [frequencies[idx], frequencies[idx-1]])
+    # Avoid division by zero for DC component
+    freq_centers[0] = freq_bins[1] / 2 if freq_bins[1] > 0 else 1e-10
+    
+    # Convert to resolution in Angstroms: resolution = voxel_size / freq
+    resolution_angstroms = voxel_size / freq_centers
+    
+    # Find resolution at FSC = 0.5
+    idx_half = np.where(fsc < 0.5)[0]
+    if len(idx_half) > 0:
+        # Linear interpolation between points
+        idx = idx_half[0]
+        if idx > 0 and fsc[idx-1] > 0.5:
+            # Interpolate
+            frac = (0.5 - fsc[idx]) / (fsc[idx-1] - fsc[idx])
+            resolution_at_half = resolution_angstroms[idx] + frac * (resolution_angstroms[idx-1] - resolution_angstroms[idx])
         else:
-            resolution = 1.0 / frequencies[idx]
+            resolution_at_half = resolution_angstroms[idx]
     else:
-        resolution = float('inf')
+        resolution_at_half = resolution_angstroms[-1]  # Better than Nyquist
     
-    return frequencies, fsc, resolution
+    return resolution_angstroms, fsc, resolution_at_half
 
 
 def save_results(
@@ -295,7 +327,7 @@ def save_results(
     if ground_truth is not None:
         print("\nCalculating FSC with ground truth...")
         mask_radius = global_mean.shape[0] // 2 - 5
-        frequencies, fsc, resolution = calculate_fsc(
+        resolution_angstroms, fsc, resolution_at_half = calculate_fsc(
             global_mean, ground_truth, voxel_spacing, mask_radius
         )
         
@@ -304,30 +336,102 @@ def save_results(
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.plot(1/frequencies[1:], fsc[1:], 'b-', linewidth=2)
-        ax.axhline(0.5, color='r', linestyle='--', label='FSC=0.5')
-        ax.axvline(resolution, color='g', linestyle='--', 
-                  label=f'Resolution={resolution:.1f}Å')
-        ax.set_xlabel('Resolution (Å)', fontsize=12)
-        ax.set_ylabel('FSC', fontsize=12)
-        ax.set_title(f'{structure_name} FSC Curve', fontsize=14)
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        ax.set_xlim(left=0)
-        ax.set_ylim([0, 1])
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(resolution_angstroms, fsc, 'b-', linewidth=2, label='FSC')
+        ax.axhline(0.5, color='r', linestyle='--', linewidth=1.5, label='FSC=0.5 threshold')
+        ax.axvline(resolution_at_half, color='g', linestyle='--', linewidth=1.5,
+                  label=f'Resolution: {resolution_at_half:.1f} Å')
+        
+        ax.set_xlabel('Resolution (Å)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Fourier Shell Correlation', fontsize=14, fontweight='bold')
+        ax.set_title(f'{structure_name} FSC Curve', fontsize=16, fontweight='bold')
+        ax.grid(True, alpha=0.3, linestyle=':')
+        ax.legend(fontsize=12, loc='upper right')
+        ax.set_xlim([resolution_angstroms[-1], resolution_angstroms[0]])  # Reverse x-axis (high to low res)
+        ax.set_ylim([0, 1.05])
+        ax.tick_params(labelsize=11)
+        
+        # Add Nyquist line
+        nyquist_res = 2 * voxel_spacing
+        ax.axvline(nyquist_res, color='orange', linestyle=':', linewidth=1.5, 
+                  label=f'Nyquist: {nyquist_res:.1f} Å', alpha=0.7)
+        ax.legend(fontsize=12, loc='upper right')
         
         fsc_plot_path = output_dir / f'{structure_name}_fsc.png'
-        plt.savefig(fsc_plot_path, dpi=150, bbox_inches='tight')
+        plt.savefig(fsc_plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Saved: {fsc_plot_path}")
         
-        results['resolution_at_fsc05'] = float(resolution)
+        results['resolution_at_fsc05'] = float(resolution_at_half)
+        results['nyquist_limit'] = float(nyquist_res)
         
         # Save FSC data
         fsc_data_path = output_dir / f'{structure_name}_fsc.npz'
-        np.savez(fsc_data_path, frequencies=frequencies, fsc=fsc, resolution=resolution)
+        np.savez(fsc_data_path, 
+                resolution_angstroms=resolution_angstroms, 
+                fsc=fsc, 
+                resolution_at_half=resolution_at_half,
+                nyquist=nyquist_res)
         print(f"Saved: {fsc_data_path}")
+    
+    # Generate orthoviews
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    center = global_mean.shape[0] // 2
+    
+    # Reconstruction views
+    axes[0, 0].imshow(global_mean[center, :, :], cmap='gray')
+    axes[0, 0].set_title('Reconstruction XY', fontsize=12, fontweight='bold')
+    axes[0, 0].axis('off')
+    
+    axes[0, 1].imshow(global_mean[:, center, :], cmap='gray')
+    axes[0, 1].set_title('Reconstruction XZ', fontsize=12, fontweight='bold')
+    axes[0, 1].axis('off')
+    
+    axes[0, 2].imshow(global_mean[:, :, center], cmap='gray')
+    axes[0, 2].set_title('Reconstruction YZ', fontsize=12, fontweight='bold')
+    axes[0, 2].axis('off')
+    
+    if ground_truth is not None:
+        # Crop ground truth to match if needed
+        if ground_truth.shape != global_mean.shape:
+            def crop_center(volume, target_shape):
+                starts = tuple((s - t) // 2 for s, t in zip(volume.shape, target_shape))
+                slices = tuple(slice(start, start + t) for start, t in zip(starts, target_shape))
+                return volume[slices]
+            ground_truth_cropped = crop_center(ground_truth, global_mean.shape)
+        else:
+            ground_truth_cropped = ground_truth
+        
+        center_gt = ground_truth_cropped.shape[0] // 2
+        
+        axes[1, 0].imshow(ground_truth_cropped[center_gt, :, :], cmap='gray')
+        axes[1, 0].set_title('Ground Truth XY', fontsize=12, fontweight='bold')
+        axes[1, 0].axis('off')
+        
+        axes[1, 1].imshow(ground_truth_cropped[:, center_gt, :], cmap='gray')
+        axes[1, 1].set_title('Ground Truth XZ', fontsize=12, fontweight='bold')
+        axes[1, 1].axis('off')
+        
+        axes[1, 2].imshow(ground_truth_cropped[:, :, center_gt], cmap='gray')
+        axes[1, 2].set_title('Ground Truth YZ', fontsize=12, fontweight='bold')
+        axes[1, 2].axis('off')
+    else:
+        # Hide ground truth row if not available
+        for ax in axes[1, :]:
+            ax.axis('off')
+    
+    plt.suptitle(f'{structure_name} - Orthogonal Views', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    
+    ortho_path = output_dir / f'{structure_name}_orthoviews.png'
+    plt.savefig(ortho_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {ortho_path}")
     
     # Save summary JSON
     summary_path = output_dir / f'{structure_name}_summary.json'
@@ -340,7 +444,8 @@ def save_results(
     print(f"  Particles: {n_particles}")
     print(f"  Samples per particle: {num_samples}")
     if ground_truth is not None:
-        print(f"  Resolution (FSC=0.5): {resolution:.1f} Å")
+        print(f"  Resolution (FSC=0.5): {results['resolution_at_fsc05']:.1f} Å")
+        print(f"  Nyquist limit: {results['nyquist_limit']:.1f} Å")
     print(f"{'='*60}\n")
 
 
