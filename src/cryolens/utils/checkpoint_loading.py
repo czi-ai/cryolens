@@ -273,6 +273,9 @@ def infer_config_from_checkpoint(state_dict: Dict[str, torch.Tensor], checkpoint
     if affinity_splats is not None and free_splats is not None:
         config['num_splats'] = affinity_splats + free_splats
         config['latent_ratio'] = affinity_splats / config['num_splats']
+        # Round to 2 decimal places to avoid floating point precision issues
+        # that can cause int(latent_dims * latent_ratio) to be off by 1
+        config['latent_ratio'] = round(config['latent_ratio'], 2)
         logger.info(f"Inferred from checkpoint: num_splats={config['num_splats']}, latent_ratio={config['latent_ratio']:.3f}")
     
     return config
