@@ -57,11 +57,12 @@ def optimize_num_particles(
     ground_truth: np.ndarray,
     particle_counts: List[int],
     num_samples: int = 1,
+    n_trials: int = 1,
     batch_size: int = 8,
     box_size: int = 48,
     voxel_spacing: float = 10.0,
     n_alignment_angles: int = 24,
-) -> Tuple[List[float], List[float], int]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """
     Test different numbers of particles and return resolution results.
     
@@ -77,6 +78,8 @@ def optimize_num_particles(
         List of particle counts to test
     num_samples : int
         Number of samples per particle (fixed for all tests)
+    n_trials : int
+        Number of random trials for each particle count
     batch_size : int
         Batch size for inference
     box_size : int
@@ -88,10 +91,14 @@ def optimize_num_particles(
         
     Returns
     -------
-    resolutions : List[float]
-        FSC=0.5 resolution for each particle count
-    correlations : List[float]
-        Average correlation with ground truth for each particle count
+    resolutions_mean : np.ndarray
+        Mean FSC=0.5 resolution for each particle count across trials
+    resolutions_std : np.ndarray
+        Standard deviation of resolution across trials
+    correlations_mean : np.ndarray
+        Mean correlation for each particle count across trials
+    correlations_std : np.ndarray
+        Standard deviation of correlation across trials
     best_num_particles : int
         Optimal number of particles
     """
@@ -131,73 +138,119 @@ def optimize_num_particles(
         box_size=box_size,
     )
     
-    # Now test different particle counts
+    # Now test different particle counts with multiple trials
     print(f"\n{'='*80}")
     print(f"Testing {len(particle_counts)} different particle counts")
     print(f"Particle counts: {particle_counts}")
+    print(f"Number of trials per count: {n_trials}")
     print(f"{'='*80}\n")
     
-    resolutions = []
-    correlations = []
+    # Store results for all trials
+    # Shape: (len(particle_counts), n_trials)
+    all_resolutions = []
+    all_correlations = []
     
     for n_particles in particle_counts:
         print(f"\n{'─'*80}")
-        print(f"Testing with {n_particles} particles")
+        print(f"Testing with {n_particles} particles ({n_trials} trials)")
         print(f"{'─'*80}")
         
-        # Use first n_particles reconstructions
-        selected_recons = mean_recons[:n_particles]
+        trial_resolutions = []
+        trial_correlations = []
         
-        # Align all selected reconstructions to ground truth
-        print(f"Aligning {len(selected_recons)} reconstructions...")
-        aligned_reconstructions = []
-        alignment_correlations = []
-        
-        for recon in tqdm(selected_recons, desc="Aligning"):
-            recon_normalized = normalize_volume_zscore(recon)
-            recon_masked = apply_soft_mask(recon_normalized, radius=22, soft_edge=5)
-            aligned, params = align_to_reference(
-                gt_masked, recon_masked, n_alignment_angles, refine=True
+        for trial_idx in range(n_trials):
+            # Randomly sample n_particles without replacement
+            if n_trials > 1:
+                particle_indices = np.random.choice(
+                    max_particles, size=n_particles, replace=False
+                )
+                selected_recons = mean_recons[particle_indices]
+                trial_label = f"Trial {trial_idx+1}/{n_trials}"
+            else:
+                # For single trial, just use first n_particles (deterministic)
+                selected_recons = mean_recons[:n_particles]
+                trial_label = "Processing"
+            
+            # Align all selected reconstructions to ground truth
+            aligned_reconstructions = []
+            alignment_correlations = []
+            
+            desc = f"{trial_label}" if n_trials > 1 else "Aligning"
+            for recon in tqdm(selected_recons, desc=desc, leave=False):
+                recon_normalized = normalize_volume_zscore(recon)
+                recon_masked = apply_soft_mask(recon_normalized, radius=22, soft_edge=5)
+                aligned, params = align_to_reference(
+                    gt_masked, recon_masked, n_alignment_angles, refine=True
+                )
+                aligned_reconstructions.append(aligned)
+                alignment_correlations.append(params['correlation'])
+            
+            # Average aligned reconstructions
+            global_mean = np.mean(aligned_reconstructions, axis=0)
+            avg_correlation = np.mean(alignment_correlations)
+            
+            # Calculate FSC
+            _, _, resolution_at_half = calculate_fsc(
+                global_mean, ground_truth, voxel_spacing
             )
-            aligned_reconstructions.append(aligned)
-            alignment_correlations.append(params['correlation'])
+            
+            trial_resolutions.append(resolution_at_half)
+            trial_correlations.append(avg_correlation)
         
-        # Average aligned reconstructions
-        global_mean = np.mean(aligned_reconstructions, axis=0)
-        avg_correlation = np.mean(alignment_correlations)
+        # Store results for this particle count
+        all_resolutions.append(trial_resolutions)
+        all_correlations.append(trial_correlations)
         
-        # Calculate FSC
-        _, _, resolution_at_half = calculate_fsc(
-            global_mean, ground_truth, voxel_spacing
-        )
+        # Print summary for this particle count
+        mean_res = np.mean(trial_resolutions)
+        std_res = np.std(trial_resolutions)
+        mean_corr = np.mean(trial_correlations)
+        std_corr = np.std(trial_correlations)
         
-        resolutions.append(resolution_at_half)
-        correlations.append(avg_correlation)
-        
-        print(f"Resolution (FSC=0.5): {resolution_at_half:.2f} Å")
-        print(f"Average correlation: {avg_correlation:.4f}")
+        if n_trials > 1:
+            print(f"Resolution (FSC=0.5): {mean_res:.2f} ± {std_res:.2f} Å")
+            print(f"Average correlation: {mean_corr:.4f} ± {std_corr:.4f}")
+        else:
+            print(f"Resolution (FSC=0.5): {mean_res:.2f} Å")
+            print(f"Average correlation: {mean_corr:.4f}")
     
-    # Find best num_particles (lowest resolution value = highest resolution)
-    best_idx = np.argmin(resolutions)
+    # Convert to numpy arrays and compute statistics
+    all_resolutions = np.array(all_resolutions)  # Shape: (n_particle_counts, n_trials)
+    all_correlations = np.array(all_correlations)
+    
+    resolutions_mean = np.mean(all_resolutions, axis=1)
+    resolutions_std = np.std(all_resolutions, axis=1)
+    correlations_mean = np.mean(all_correlations, axis=1)
+    correlations_std = np.std(all_correlations, axis=1)
+    
+    # Find best num_particles (lowest mean resolution value = highest resolution)
+    best_idx = np.argmin(resolutions_mean)
     best_num_particles = particle_counts[best_idx]
-    best_resolution = resolutions[best_idx]
+    best_resolution = resolutions_mean[best_idx]
+    best_resolution_std = resolutions_std[best_idx]
     
     print(f"\n{'='*80}")
     print(f"OPTIMIZATION RESULTS")
     print(f"{'='*80}")
     print(f"Best num_particles: {best_num_particles}")
-    print(f"Best resolution: {best_resolution:.2f} Å")
+    if n_trials > 1:
+        print(f"Best resolution: {best_resolution:.2f} ± {best_resolution_std:.2f} Å")
+    else:
+        print(f"Best resolution: {best_resolution:.2f} Å")
     print(f"{'='*80}\n")
     
-    return resolutions, correlations, best_num_particles
+    return resolutions_mean, resolutions_std, correlations_mean, correlations_std, best_num_particles
 
 
 def plot_optimization_results(
     particle_counts: List[int],
-    resolutions: List[float],
-    correlations: List[float],
+    resolutions_mean: np.ndarray,
+    resolutions_std: np.ndarray,
+    correlations_mean: np.ndarray,
+    correlations_std: np.ndarray,
     output_path: Path,
     structure_name: str,
+    n_trials: int,
 ):
     """Create visualization of optimization results."""
     import matplotlib.pyplot as plt
@@ -205,31 +258,39 @@ def plot_optimization_results(
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
     
     # Resolution plot
-    ax1.plot(particle_counts, resolutions, 'bo-', linewidth=2, markersize=8)
-    ax1.axhline(min(resolutions), color='r', linestyle='--', alpha=0.5,
-                label=f'Best: {min(resolutions):.1f} Å')
-    best_idx = np.argmin(resolutions)
-    ax1.plot(particle_counts[best_idx], resolutions[best_idx], 'r*', 
+    ax1.errorbar(particle_counts, resolutions_mean, yerr=resolutions_std,
+                 fmt='bo-', linewidth=2, markersize=8, capsize=5, capthick=2,
+                 label='Mean ± Std' if n_trials > 1 else 'Resolution')
+    ax1.axhline(min(resolutions_mean), color='r', linestyle='--', alpha=0.5,
+                label=f'Best: {min(resolutions_mean):.1f} Å')
+    best_idx = np.argmin(resolutions_mean)
+    ax1.plot(particle_counts[best_idx], resolutions_mean[best_idx], 'r*', 
              markersize=20, label=f'Optimal: {particle_counts[best_idx]} particles')
     ax1.set_xlabel('Number of Particles Averaged', fontsize=14, fontweight='bold')
     ax1.set_ylabel('Resolution at FSC=0.5 (Å)', fontsize=14, fontweight='bold')
-    ax1.set_title(f'{structure_name} - Resolution vs Num Particles', 
-                  fontsize=16, fontweight='bold')
+    title = f'{structure_name} - Resolution vs Num Particles'
+    if n_trials > 1:
+        title += f' ({n_trials} trials)'
+    ax1.set_title(title, fontsize=16, fontweight='bold')
     ax1.grid(True, alpha=0.3, linestyle=':')
     ax1.legend(fontsize=12)
     ax1.invert_yaxis()  # Lower resolution values are better
     
     # Correlation plot
-    ax2.plot(particle_counts, correlations, 'go-', linewidth=2, markersize=8)
-    ax2.axhline(max(correlations), color='r', linestyle='--', alpha=0.5,
-                label=f'Best: {max(correlations):.4f}')
-    best_corr_idx = np.argmax(correlations)
-    ax2.plot(particle_counts[best_corr_idx], correlations[best_corr_idx], 'r*',
+    ax2.errorbar(particle_counts, correlations_mean, yerr=correlations_std,
+                 fmt='go-', linewidth=2, markersize=8, capsize=5, capthick=2,
+                 label='Mean ± Std' if n_trials > 1 else 'Correlation')
+    ax2.axhline(max(correlations_mean), color='r', linestyle='--', alpha=0.5,
+                label=f'Best: {max(correlations_mean):.4f}')
+    best_corr_idx = np.argmax(correlations_mean)
+    ax2.plot(particle_counts[best_corr_idx], correlations_mean[best_corr_idx], 'r*',
              markersize=20, label=f'Peak: {particle_counts[best_corr_idx]} particles')
     ax2.set_xlabel('Number of Particles Averaged', fontsize=14, fontweight='bold')
     ax2.set_ylabel('Average Correlation Coefficient', fontsize=14, fontweight='bold')
-    ax2.set_title(f'{structure_name} - Correlation vs Num Particles',
-                  fontsize=16, fontweight='bold')
+    title = f'{structure_name} - Correlation vs Num Particles'
+    if n_trials > 1:
+        title += f' ({n_trials} trials)'
+    ax2.set_title(title, fontsize=16, fontweight='bold')
     ax2.grid(True, alpha=0.3, linestyle=':')
     ax2.legend(fontsize=12)
     
@@ -286,6 +347,12 @@ def main():
         type=int,
         default=1,
         help='Fixed number of samples per particle (default: 1)',
+    )
+    parser.add_argument(
+        '--n-trials',
+        type=int,
+        default=1,
+        help='Number of random trials for each particle count (default: 1)',
     )
     parser.add_argument(
         '--particle-range',
@@ -384,12 +451,13 @@ def main():
         ground_truth = mrc.data.copy()
     
     # Run optimization
-    resolutions, correlations, best_num_particles = optimize_num_particles(
+    resolutions_mean, resolutions_std, correlations_mean, correlations_std, best_num_particles = optimize_num_particles(
         pipeline=pipeline,
         particles=particles,
         ground_truth=ground_truth,
         particle_counts=particle_counts,
         num_samples=args.num_samples,
+        n_trials=args.n_trials,
         batch_size=args.batch_size,
         box_size=box_size,
         voxel_spacing=voxel_spacing,
@@ -405,12 +473,15 @@ def main():
         'structure': structure_name,
         'total_particles_available': len(particles),
         'num_samples_per_particle': args.num_samples,
+        'n_trials': args.n_trials,
         'voxel_spacing': voxel_spacing,
         'particle_counts': particle_counts,
-        'resolutions': resolutions,
-        'correlations': correlations,
+        'resolutions_mean': resolutions_mean.tolist(),
+        'resolutions_std': resolutions_std.tolist(),
+        'correlations_mean': correlations_mean.tolist(),
+        'correlations_std': correlations_std.tolist(),
         'best_num_particles': best_num_particles,
-        'best_resolution': float(min(resolutions)),
+        'best_resolution': float(min(resolutions_mean)),
     }
     
     results_path = output_dir / 'particle_optimization_results.json'
@@ -421,41 +492,74 @@ def main():
     # Save detailed CSV
     csv_path = output_dir / 'particle_optimization_data.csv'
     with open(csv_path, 'w') as f:
-        f.write('num_particles,resolution_angstroms,correlation\n')
-        for np_val, res, corr in zip(particle_counts, resolutions, correlations):
-            f.write(f'{np_val},{res:.4f},{corr:.6f}\n')
+        if args.n_trials > 1:
+            f.write('num_particles,resolution_mean,resolution_std,correlation_mean,correlation_std\n')
+            for np_val, res_mean, res_std, corr_mean, corr_std in zip(
+                particle_counts, resolutions_mean, resolutions_std, 
+                correlations_mean, correlations_std
+            ):
+                f.write(f'{np_val},{res_mean:.4f},{res_std:.4f},{corr_mean:.6f},{corr_std:.6f}\n')
+        else:
+            f.write('num_particles,resolution_angstroms,correlation\n')
+            for np_val, res, corr in zip(particle_counts, resolutions_mean, correlations_mean):
+                f.write(f'{np_val},{res:.4f},{corr:.6f}\n')
     print(f"Saved: {csv_path}")
     
     # Plot results
     plot_path = output_dir / 'particle_optimization_plot.png'
     plot_optimization_results(
-        particle_counts, resolutions, correlations, plot_path, structure_name
+        particle_counts, resolutions_mean, resolutions_std,
+        correlations_mean, correlations_std, plot_path, structure_name, args.n_trials
     )
     
     # Print summary table
     print(f"\n{'='*80}")
     print(f"PARTICLE OPTIMIZATION SUMMARY TABLE")
+    if args.n_trials > 1:
+        print(f"(Mean ± Std across {args.n_trials} trials)")
     print(f"{'='*80}")
-    print(f"{'Num Particles':<15} {'Resolution (Å)':<20} {'Correlation':<15}")
-    print(f"{'-'*80}")
-    for np_val, res, corr in zip(particle_counts, resolutions, correlations):
-        marker = " ← BEST" if np_val == best_num_particles else ""
-        print(f"{np_val:<15} {res:<20.2f} {corr:<15.4f}{marker}")
+    if args.n_trials > 1:
+        print(f"{'Num Particles':<15} {'Resolution (Å)':<25} {'Correlation':<20}")
+        print(f"{'-'*80}")
+        for np_val, res_mean, res_std, corr_mean, corr_std in zip(
+            particle_counts, resolutions_mean, resolutions_std,
+            correlations_mean, correlations_std
+        ):
+            marker = " ← BEST" if np_val == best_num_particles else ""
+            print(f"{np_val:<15} {res_mean:>6.2f} ± {res_std:<5.2f}          "
+                  f"{corr_mean:>6.4f} ± {corr_std:<6.4f}{marker}")
+    else:
+        print(f"{'Num Particles':<15} {'Resolution (Å)':<20} {'Correlation':<15}")
+        print(f"{'-'*80}")
+        for np_val, res, corr in zip(particle_counts, resolutions_mean, correlations_mean):
+            marker = " ← BEST" if np_val == best_num_particles else ""
+            print(f"{np_val:<15} {res:<20.2f} {corr:<15.4f}{marker}")
     print(f"{'='*80}\n")
     
     # Calculate improvement metrics
-    initial_res = resolutions[0]
-    best_res = min(resolutions)
+    initial_res = resolutions_mean[0]
+    initial_std = resolutions_std[0]
+    best_res = min(resolutions_mean)
+    best_idx = np.argmin(resolutions_mean)
+    best_std = resolutions_std[best_idx]
     improvement = initial_res - best_res
     percent_improvement = (improvement / initial_res) * 100
     
     print(f"\n📊 IMPROVEMENT ANALYSIS:")
-    print(f"   Initial (1 particle): {initial_res:.2f} Å")
-    print(f"   Best ({best_num_particles} particles): {best_res:.2f} Å")
-    print(f"   Improvement: {improvement:.2f} Å ({percent_improvement:.1f}%)")
+    if args.n_trials > 1:
+        print(f"   Initial (1 particle): {initial_res:.2f} ± {initial_std:.2f} Å")
+        print(f"   Best ({best_num_particles} particles): {best_res:.2f} ± {best_std:.2f} Å")
+        print(f"   Improvement: {improvement:.2f} Å ({percent_improvement:.1f}%)")
+    else:
+        print(f"   Initial (1 particle): {initial_res:.2f} Å")
+        print(f"   Best ({best_num_particles} particles): {best_res:.2f} Å")
+        print(f"   Improvement: {improvement:.2f} Å ({percent_improvement:.1f}%)")
     
     print(f"\n🎯 RECOMMENDATION: Use {best_num_particles} particles for optimal resolution")
-    print(f"   This achieves {best_res:.2f} Å resolution\n")
+    if args.n_trials > 1:
+        print(f"   This achieves {best_res:.2f} ± {best_std:.2f} Å resolution\n")
+    else:
+        print(f"   This achieves {best_res:.2f} Å resolution\n")
     
     print("Optimization complete!")
 
