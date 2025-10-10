@@ -519,9 +519,12 @@ def save_results(
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     
-    fig, axes = plt.subplots(1, 3 if ground_truth is None else 2, 3, figsize=(15, 10 if ground_truth is not None else 5))
+    # Create subplot grid based on ground truth availability
     if ground_truth is None:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         axes = axes.reshape(1, -1)
+    else:
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     
     center = global_mean.shape[0] // 2
     
