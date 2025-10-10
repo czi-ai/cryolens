@@ -338,7 +338,84 @@ def save_results(
     }
     
     if ground_truth is not None:
-        print("\nCalculating FSC with ground truth...")
+        print("\nAligning and calculating FSC with ground truth...")
+        
+        # Crop ground truth to match reconstruction size if needed
+        if ground_truth.shape != global_mean.shape:
+            def crop_center(volume, target_shape):
+                starts = tuple((s - t) // 2 for s, t in zip(volume.shape, target_shape))
+                slices = tuple(slice(start, start + t) for start, t in zip(starts, target_shape))
+                return volume[slices]
+            ground_truth = crop_center(ground_truth, global_mean.shape)
+            print(f"Cropped ground truth to {ground_truth.shape}")
+        
+        # Check if reconstruction is inverted (dark density) compared to ground truth
+        # Correlate as-is vs inverted to determine
+        corr_normal = np.corrcoef(global_mean.flatten(), ground_truth.flatten())[0, 1]
+        corr_inverted = np.corrcoef(-global_mean.flatten(), ground_truth.flatten())[0, 1]
+        
+        if corr_inverted > corr_normal:
+            print(f"Inverting reconstruction (correlation improved: {corr_normal:.3f} -> {corr_inverted:.3f})")
+            recon_for_alignment = -global_mean
+        else:
+            print(f"Using reconstruction as-is (correlation: {corr_normal:.3f})")
+            recon_for_alignment = global_mean
+        
+        # Align reconstruction to ground truth using cross-correlation
+        from scipy import ndimage
+        
+        # Normalize both volumes
+        recon_norm = (recon_for_alignment - recon_for_alignment.mean()) / (recon_for_alignment.std() + 1e-10)
+        gt_norm = (ground_truth - ground_truth.mean()) / (ground_truth.std() + 1e-10)
+        
+        # Cross-correlation to find best alignment
+        # Try rotations around each axis
+        best_corr = -np.inf
+        best_aligned = None
+        best_angle = 0
+        best_axis = 0
+        
+        print("Searching for best alignment (trying different rotations)...")
+        
+        # Try different rotation angles (coarse then fine)
+        angles_coarse = np.linspace(0, 360, 36, endpoint=False)  # Every 10 degrees
+        
+        for axis in [0, 1, 2]:  # Try each axis
+            for angle in tqdm(angles_coarse, desc=f"Axis {axis}", leave=False):
+                # Rotate reconstruction
+                rotated = ndimage.rotate(recon_norm, angle, axes=((axis+1)%3, (axis+2)%3), 
+                                        reshape=False, order=1)  # order=1 for speed
+                
+                # Calculate correlation
+                corr = np.sum(rotated * gt_norm)
+                
+                if corr > best_corr:
+                    best_corr = corr
+                    best_angle = angle
+                    best_axis = axis
+        
+        # Fine search around best angle
+        angles_fine = np.linspace(best_angle - 15, best_angle + 15, 31)
+        for angle in angles_fine:
+            rotated = ndimage.rotate(recon_norm, angle, axes=((best_axis+1)%3, (best_axis+2)%3),
+                                    reshape=False, order=1)
+            corr = np.sum(rotated * gt_norm)
+            if corr > best_corr:
+                best_corr = corr
+                best_angle = angle
+        
+        # Apply best rotation with high-quality interpolation
+        best_aligned = ndimage.rotate(recon_for_alignment, best_angle,
+                                     axes=((best_axis+1)%3, (best_axis+2)%3),
+                                     reshape=False, order=3)
+        
+        print(f"Best alignment: rotation {best_angle:.1f}° around axis {best_axis}")
+        print(f"Correlation after alignment: {best_corr:.3f}")
+        
+        # Use aligned reconstruction for FSC
+        aligned_recon = best_aligned
+        
+        # Calculate FSC with aligned volumes
         mask_radius = global_mean.shape[0] // 2 - 5
         resolution_angstroms, fsc, resolution_at_half = calculate_fsc(
             global_mean, ground_truth, voxel_spacing, mask_radius
@@ -394,18 +471,20 @@ def save_results(
     
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     
-    center = global_mean.shape[0] // 2
+    # Use aligned reconstruction if available, otherwise use original
+    display_recon = locals().get('aligned_recon', global_mean)
+    center = display_recon.shape[0] // 2
     
     # Reconstruction views
-    axes[0, 0].imshow(global_mean[center, :, :], cmap='gray')
+    axes[0, 0].imshow(display_recon[center, :, :], cmap='gray')
     axes[0, 0].set_title('Reconstruction XY', fontsize=12, fontweight='bold')
     axes[0, 0].axis('off')
     
-    axes[0, 1].imshow(global_mean[:, center, :], cmap='gray')
+    axes[0, 1].imshow(display_recon[:, center, :], cmap='gray')
     axes[0, 1].set_title('Reconstruction XZ', fontsize=12, fontweight='bold')
     axes[0, 1].axis('off')
     
-    axes[0, 2].imshow(global_mean[:, :, center], cmap='gray')
+    axes[0, 2].imshow(display_recon[:, :, center], cmap='gray')
     axes[0, 2].set_title('Reconstruction YZ', fontsize=12, fontweight='bold')
     axes[0, 2].axis('off')
     
