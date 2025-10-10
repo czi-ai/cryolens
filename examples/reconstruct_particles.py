@@ -14,12 +14,18 @@ Reconstruct from extracted particles:
         --checkpoint-epoch 2600 \\
         --output ./reconstructions/
 
-Reconstruct directly from Copick:
+Reconstruct with uncertainty estimation:
     python reconstruct_particles.py \\
-        --copick-config mlc_experimental_publictest \\
-        --structure ribosome \\
-        --num-particles 30 \\
+        --particles ./example_data/ribosome_particles.zarr \\
         --checkpoint-epoch 2600 \\
+        --num-samples 10 \\
+        --output ./reconstructions/
+
+Reconstruct with FSC analysis:
+    python reconstruct_particles.py \\
+        --particles ./example_data/ribosome_particles.zarr \\
+        --checkpoint-epoch 2600 \\
+        --ground-truth ./references/ribosome.mrc \\
         --output ./reconstructions/
 """
 
@@ -39,108 +45,24 @@ except ImportError:
     print("Error: mrcfile is not installed. Install with: pip install mrcfile")
     sys.exit(1)
 
-
-def load_model(checkpoint_path: str, device: str = 'cuda') -> torch.nn.Module:
-    """
-    Load CryoLens model from checkpoint.
-    
-    Parameters
-    ----------
-    checkpoint_path : str
-        Path to checkpoint file
-    device : str
-        Device to load model on ('cuda' or 'cpu')
-        
-    Returns
-    -------
-    model : torch.nn.Module
-        Loaded model in eval mode
-    """
-    print(f"Loading checkpoint from: {checkpoint_path}")
-    
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    
-    # Extract model state dict
-    if 'state_dict' in checkpoint:
-        state_dict = checkpoint['state_dict']
-    else:
-        state_dict = checkpoint
-    
-    # Import model classes
-    from cryolens.models.vae import AffinityVAE
-    from cryolens.models.encoders import Encoder3D
-    from cryolens.models.decoders import SegmentedGaussianSplatDecoder
-    
-    # Get config from checkpoint or use defaults
-    if 'hyper_parameters' in checkpoint:
-        config = checkpoint['hyper_parameters']
-        latent_dims = config.get('latent_dims', 40)
-        num_splats = config.get('num_splats', 768)
-        box_size = config.get('box_size', 48)
-        latent_ratio = config.get('latent_ratio', 0.8)
-    else:
-        # Defaults matching paper
-        latent_dims = 40
-        num_splats = 768
-        box_size = 48
-        latent_ratio = 0.8
-    
-    print(f"Model config: latent_dims={latent_dims}, num_splats={num_splats}, "
-          f"box_size={box_size}, latent_ratio={latent_ratio}")
-    
-    # Create model architecture
-    encoder = Encoder3D(
-        input_shape=(box_size, box_size, box_size),
-        layer_channels=(8, 16, 32, 64)
-    )
-    
-    decoder = SegmentedGaussianSplatDecoder(
-        (box_size, box_size, box_size),
-        latent_dims=latent_dims,
-        n_splats=num_splats,
-        output_channels=1,
-        device=device,
-        splat_sigma_range=(0.005, 0.1),
-        padding=9,
-        latent_ratio=latent_ratio
-    )
-    
-    model = AffinityVAE(
-        encoder=encoder,
-        decoder=decoder,
-        latent_dims=latent_dims,
-        pose_channels=4,
-    )
-    
-    # Load weights
-    model.load_state_dict(state_dict, strict=False)
-    model = model.to(device)
-    model.eval()
-    
-    print(f"Model loaded successfully on {device}")
-    
-    return model
+from cryolens.inference.pipeline import create_inference_pipeline
 
 
-def reconstruct_particles(
-    model: torch.nn.Module,
+def reconstruct_with_uncertainty(
+    pipeline,
     particles: np.ndarray,
-    device: str = 'cuda',
     batch_size: int = 8,
     num_samples: int = 1,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
-    Reconstruct particles using CryoLens model.
+    Reconstruct particles with optional uncertainty estimation.
     
     Parameters
     ----------
-    model : torch.nn.Module
-        CryoLens model
+    pipeline : InferencePipeline
+        CryoLens inference pipeline
     particles : np.ndarray
         Particle volumes (N, D, D, D)
-    device : str
-        Device for inference
     batch_size : int
         Batch size for inference
     num_samples : int
@@ -148,41 +70,60 @@ def reconstruct_particles(
         
     Returns
     -------
-    reconstructions : np.ndarray
-        Reconstructed volumes (N, num_samples, D, D, D)
+    mean_recons : np.ndarray
+        Mean reconstructions (N, D, D, D)
+    std_recons : np.ndarray or None
+        Standard deviation across samples (N, D, D, D) if num_samples > 1
     """
     n_particles = len(particles)
-    reconstructions = []
+    all_reconstructions = []
     
-    with torch.no_grad():
-        for i in tqdm(range(0, n_particles, batch_size), desc="Reconstructing"):
-            batch_particles = particles[i:i+batch_size]
+    # Process in batches
+    for i in tqdm(range(0, n_particles, batch_size), desc="Reconstructing"):
+        batch_particles = particles[i:i+batch_size]
+        batch_recons = []
+        
+        # Multiple samples per particle if requested
+        for sample_idx in range(num_samples):
+            batch_results = []
             
-            # Convert to tensor
-            batch_tensor = torch.from_numpy(batch_particles).float()
-            batch_tensor = batch_tensor.unsqueeze(1)  # Add channel dim
-            batch_tensor = batch_tensor.to(device)
-            
-            # Multiple samples per particle if requested
-            batch_recons = []
-            for _ in range(num_samples):
+            for particle in batch_particles:
                 # Add small noise for uncertainty estimation
                 if num_samples > 1:
-                    noise_scale = 0.05 * batch_tensor.std()
-                    noisy_input = batch_tensor + torch.randn_like(batch_tensor) * noise_scale
+                    noise_scale = 0.05 * particle.std()
+                    noisy_particle = particle + np.random.randn(*particle.shape) * noise_scale
                 else:
-                    noisy_input = batch_tensor
+                    noisy_particle = particle
                 
                 # Reconstruct
-                recon, _, _, _, _, _ = model(noisy_input)
-                batch_recons.append(recon.squeeze(1).cpu().numpy())
+                result = pipeline.process_volume(
+                    noisy_particle,
+                    return_embeddings=False,
+                    return_reconstruction=True,
+                    use_identity_pose=True
+                )
+                batch_results.append(result['reconstruction'])
             
-            # Stack samples
-            batch_recons = np.stack(batch_recons, axis=1)  # (batch, samples, D, D, D)
-            reconstructions.append(batch_recons)
+            batch_recons.append(np.stack(batch_results))
+        
+        # Stack samples: (num_samples, batch_size, D, D, D)
+        batch_recons = np.stack(batch_recons)
+        # Transpose to: (batch_size, num_samples, D, D, D)
+        batch_recons = np.transpose(batch_recons, (1, 0, 2, 3, 4))
+        all_reconstructions.append(batch_recons)
     
-    reconstructions = np.concatenate(reconstructions, axis=0)
-    return reconstructions
+    # Concatenate all batches: (N, num_samples, D, D, D)
+    all_reconstructions = np.concatenate(all_reconstructions, axis=0)
+    
+    # Calculate mean and std
+    mean_recons = all_reconstructions.mean(axis=1)  # (N, D, D, D)
+    
+    if num_samples > 1:
+        std_recons = all_reconstructions.std(axis=1)  # (N, D, D, D)
+    else:
+        std_recons = None
+    
+    return mean_recons, std_recons
 
 
 def calculate_fsc(
@@ -212,8 +153,6 @@ def calculate_fsc(
     resolution : float
         Resolution at FSC=0.5 (Angstroms)
     """
-    from scipy import ndimage
-    
     # Apply spherical mask if requested
     if mask_radius is not None:
         center = np.array(volume1.shape) // 2
@@ -275,53 +214,57 @@ def calculate_fsc(
 
 
 def save_results(
-    reconstructions: np.ndarray,
-    particles: np.ndarray,
+    mean_reconstructions: np.ndarray,
     output_dir: Path,
     structure_name: str,
     voxel_spacing: float = 10.0,
+    std_reconstructions: Optional[np.ndarray] = None,
     ground_truth: Optional[np.ndarray] = None,
+    num_samples: int = 1,
 ):
     """
     Save reconstruction results.
     
     Parameters
     ----------
-    reconstructions : np.ndarray
-        Reconstructed volumes (N, num_samples, D, D, D)
-    particles : np.ndarray
-        Original particles
+    mean_reconstructions : np.ndarray
+        Mean reconstructed volumes (N, D, D, D)
     output_dir : Path
         Output directory
     structure_name : str
         Structure name
     voxel_spacing : float
         Voxel spacing in Angstroms
+    std_reconstructions : np.ndarray, optional
+        Uncertainty maps (N, D, D, D)
     ground_truth : np.ndarray, optional
         Ground truth structure for FSC
+    num_samples : int
+        Number of samples used per particle
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    n_particles, num_samples = reconstructions.shape[:2]
+    n_particles = len(mean_reconstructions)
     
     print(f"\nSaving results to {output_dir}")
     
-    # Average reconstructions across samples and particles
-    mean_recon = reconstructions.mean(axis=(0, 1))  # Average over particles and samples
+    # Average across all particles
+    global_mean = mean_reconstructions.mean(axis=0)
     
     # Save mean reconstruction
     mean_path = output_dir / f'{structure_name}_mean_reconstruction.mrc'
     with mrcfile.new(str(mean_path), overwrite=True) as mrc:
-        mrc.set_data(mean_recon.astype(np.float32))
+        mrc.set_data(global_mean.astype(np.float32))
         mrc.voxel_size = voxel_spacing
     print(f"Saved: {mean_path}")
     
-    # Calculate and save uncertainty if multiple samples
-    if num_samples > 1:
-        std_recon = reconstructions.std(axis=1).mean(axis=0)  # Std across samples, mean across particles
+    # Save uncertainty if available
+    if std_reconstructions is not None:
+        # Average uncertainty across particles
+        global_uncertainty = std_reconstructions.mean(axis=0)
         uncertainty_path = output_dir / f'{structure_name}_uncertainty.mrc'
         with mrcfile.new(str(uncertainty_path), overwrite=True) as mrc:
-            mrc.set_data(std_recon.astype(np.float32))
+            mrc.set_data(global_uncertainty.astype(np.float32))
             mrc.voxel_size = voxel_spacing
         print(f"Saved: {uncertainty_path}")
     
@@ -335,9 +278,9 @@ def save_results(
     
     if ground_truth is not None:
         print("\nCalculating FSC with ground truth...")
-        mask_radius = mean_recon.shape[0] // 2 - 5
+        mask_radius = global_mean.shape[0] // 2 - 5
         frequencies, fsc, resolution = calculate_fsc(
-            mean_recon, ground_truth, voxel_spacing, mask_radius
+            global_mean, ground_truth, voxel_spacing, mask_radius
         )
         
         # Save FSC curve
@@ -392,36 +335,12 @@ def main():
         epilog=__doc__,
     )
     
-    # Input options (mutually exclusive)
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument(
+    # Input options
+    parser.add_argument(
         '--particles',
         type=str,
+        required=True,
         help='Path to extracted particles zarr file',
-    )
-    input_group.add_argument(
-        '--copick-config',
-        type=str,
-        help='Copick config name or path for direct extraction',
-    )
-    
-    # Copick-specific options
-    parser.add_argument(
-        '--structure',
-        type=str,
-        help='Structure name (required if using --copick-config)',
-    )
-    parser.add_argument(
-        '--num-particles',
-        type=int,
-        default=30,
-        help='Number of particles to extract from Copick (default: 30)',
-    )
-    parser.add_argument(
-        '--voxel-spacing',
-        type=float,
-        default=10.0,
-        help='Voxel spacing for Copick extraction (default: 10.0)',
     )
     
     # Model options
@@ -472,10 +391,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Validate Copick arguments
-    if args.copick_config and not args.structure:
-        parser.error("--structure is required when using --copick-config")
-    
     # Get checkpoint path
     if args.checkpoint_path:
         checkpoint_path = args.checkpoint_path
@@ -483,60 +398,44 @@ def main():
         from cryolens.data import fetch_checkpoint
         checkpoint_path = fetch_checkpoint(epoch=args.checkpoint_epoch)
     
-    # Load model
-    model = load_model(checkpoint_path, device=args.device)
+    # Create inference pipeline
+    print(f"Loading model from: {checkpoint_path}")
+    device = torch.device(args.device)
+    pipeline = create_inference_pipeline(checkpoint_path, device=device)
+    print(f"Model loaded successfully on {device}")
     
-    # Load particles
-    if args.particles:
-        # Load from zarr
-        import zarr
-        print(f"Loading particles from: {args.particles}")
-        root = zarr.open(args.particles, mode='r')
-        particles = root['particles'][:]
-        
-        # Load metadata
-        metadata_path = Path(args.particles) / 'metadata.json'
-        with open(metadata_path) as f:
-            metadata = json.load(f)
-        
-        structure_name = metadata['structure']
-        voxel_spacing = metadata.get('voxel_spacing', 10.0)
-        
-        print(f"Loaded {len(particles)} particles for {structure_name}")
-        
-    else:
-        # Extract from Copick
-        print(f"Extracting particles from Copick project...")
-        
-        # Import and run extraction
-        from cryolens.data import get_copick_config
-        import copick
-        
-        # Get config
-        try:
-            config_path = get_copick_config(args.copick_config)
-        except ValueError:
-            config_path = args.copick_config
-        
-        # This would need the extract_particles_from_run function
-        # For now, suggest using extract_copick_particles.py first
-        print("Error: Direct Copick extraction not yet implemented.")
-        print("Please use extract_copick_particles.py first, then pass --particles")
-        return 1
-        
+    # Load particles from zarr
+    import zarr
+    print(f"\nLoading particles from: {args.particles}")
+    root = zarr.open(args.particles, mode='r')
+    particles = root['particles'][:]
+    
+    # Load metadata
+    metadata_path = Path(args.particles) / 'metadata.json'
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+    
+    structure_name = metadata['structure']
+    voxel_spacing = metadata.get('voxel_spacing', 10.0)
+    
+    print(f"Loaded {len(particles)} particles for {structure_name}")
+    print(f"Voxel spacing: {voxel_spacing} Å")
+    
     # Load ground truth if provided
     ground_truth = None
     if args.ground_truth:
-        print(f"Loading ground truth from: {args.ground_truth}")
+        print(f"\nLoading ground truth from: {args.ground_truth}")
         with mrcfile.open(args.ground_truth) as mrc:
             ground_truth = mrc.data.copy()
     
-    # Reconstruct
+    # Reconstruct with uncertainty estimation
     print(f"\nReconstructing {len(particles)} particles...")
-    reconstructions = reconstruct_particles(
-        model=model,
+    if args.num_samples > 1:
+        print(f"Using {args.num_samples} samples per particle for uncertainty estimation")
+    
+    mean_recons, std_recons = reconstruct_with_uncertainty(
+        pipeline=pipeline,
         particles=particles,
-        device=args.device,
         batch_size=args.batch_size,
         num_samples=args.num_samples,
     )
@@ -544,12 +443,13 @@ def main():
     # Save results
     output_dir = Path(args.output) / structure_name
     save_results(
-        reconstructions=reconstructions,
-        particles=particles,
+        mean_reconstructions=mean_recons,
         output_dir=output_dir,
         structure_name=structure_name,
         voxel_spacing=voxel_spacing,
+        std_reconstructions=std_recons,
         ground_truth=ground_truth,
+        num_samples=args.num_samples,
     )
     
     print("Reconstruction complete!")
