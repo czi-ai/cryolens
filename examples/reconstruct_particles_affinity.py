@@ -2,8 +2,9 @@
 """
 Reconstruct particles using CryoLens with affinity output (Gaussian splats without final convolution).
 
-This script is similar to reconstruct_particles.py but specifically uses the affinity segment
-output (Gaussian splats) without the final convolutional layer for reconstruction and alignment.
+This script uses only the affinity segment output (Gaussian splats) without the final
+convolutional layer for reconstruction and alignment, matching the paper's claim that
+alignment can be performed equivalently on Gaussian splat representations.
 
 Examples
 --------
@@ -11,19 +12,14 @@ Reconstruct from extracted particles using affinity output:
     python reconstruct_particles_affinity.py \\
         --particles ./example_data/ribosome_particles.zarr \\
         --checkpoint-epoch 2600 \\
-        --output ./reconstructions/
-
-Reconstruct with uncertainty estimation:
-    python reconstruct_particles_affinity.py \\
-        --particles ./example_data/ribosome_particles.zarr \\
-        --checkpoint-epoch 2600 \\
-        --num-samples 10 \\
+        --num-samples 25 \\
         --output ./reconstructions/
 
 Reconstruct with FSC analysis:
     python reconstruct_particles_affinity.py \\
         --particles ./example_data/ribosome_particles.zarr \\
         --checkpoint-epoch 2600 \\
+        --num-samples 25 \\
         --ground-truth ./references/ribosome.mrc \\
         --output ./reconstructions/
 """
@@ -32,11 +28,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import numpy as np
 import torch
 from tqdm import tqdm
+from scipy import ndimage
+from scipy.fft import fftn, fftshift
 
 try:
     import mrcfile
@@ -65,11 +63,109 @@ def crop_to_size(volume: np.ndarray, target_shape: Tuple[int, ...]) -> np.ndarra
     return volume[tuple(crop_slices)]
 
 
+def apply_soft_mask(volume: np.ndarray, radius: float = 20, soft_edge: float = 5) -> np.ndarray:
+    """Apply soft spherical mask with Gaussian edge"""
+    shape = volume.shape
+    center = np.array(shape) // 2
+    
+    nz, ny, nx = shape
+    z, y, x = np.ogrid[:nz, :ny, :nx]
+    r = np.sqrt((z - center[0])**2 + (y - center[1])**2 + (x - center[2])**2)
+    
+    mask = np.ones_like(r, dtype=float)
+    transition_zone = (r > radius) & (r < radius + soft_edge)
+    mask[transition_zone] = np.exp(-(r[transition_zone] - radius)**2 / (2 * (soft_edge/3)**2))
+    mask[r >= radius + soft_edge] = 0
+    
+    return volume * mask
+
+
+def normalize_volume_zscore(volume: np.ndarray) -> np.ndarray:
+    """Z-score normalization"""
+    mean_val = np.mean(volume)
+    std_val = np.std(volume)
+    if std_val > 0:
+        return (volume - mean_val) / std_val
+    return volume - mean_val
+
+
+def compute_3d_cross_correlation(vol1: np.ndarray, vol2: np.ndarray) -> np.ndarray:
+    """Compute 3D cross-correlation using FFT"""
+    from scipy.fft import ifftn
+    fft1 = fftn(vol1)
+    fft2 = fftn(vol2)
+    cross_corr = np.real(ifftn(fft1 * np.conj(fft2)))
+    return fftshift(cross_corr)
+
+
+def align_to_reference(
+    reference: np.ndarray, 
+    volume: np.ndarray, 
+    n_angles: int = 24,
+    refine: bool = True
+) -> Tuple[np.ndarray, dict]:
+    """Enhanced alignment to reference with optional refinement"""
+    
+    best_corr = -np.inf
+    best_aligned = volume.copy()
+    best_params = {}
+    
+    # Coarse search
+    for axis_config in [(0, 1), (0, 2), (1, 2)]:
+        angles = np.linspace(0, 360, n_angles, endpoint=False)
+        
+        for angle in angles:
+            rotated = ndimage.rotate(volume, angle, axes=axis_config, reshape=False, order=1)
+            cross_corr = compute_3d_cross_correlation(reference, rotated)
+            max_idx = np.unravel_index(np.argmax(cross_corr), cross_corr.shape)
+            center = np.array(cross_corr.shape) // 2
+            shift = np.array(max_idx) - center
+            aligned = ndimage.shift(rotated, shift, order=1)
+            corr = np.corrcoef(reference.flatten(), aligned.flatten())[0, 1]
+            
+            if corr > best_corr:
+                best_corr = corr
+                best_aligned = aligned.copy()
+                best_params = {
+                    'rotation_axes': axis_config,
+                    'angle': angle,
+                    'shift': shift.tolist(),
+                    'correlation': corr
+                }
+    
+    # Fine refinement
+    if refine and best_params:
+        refined_angles = np.linspace(
+            best_params['angle'] - 10,
+            best_params['angle'] + 10,
+            21
+        )
+        for angle in refined_angles:
+            rotated = ndimage.rotate(volume, angle, axes=best_params['rotation_axes'], 
+                                    reshape=False, order=1)
+            cross_corr = compute_3d_cross_correlation(reference, rotated)
+            max_idx = np.unravel_index(np.argmax(cross_corr), cross_corr.shape)
+            center = np.array(cross_corr.shape) // 2
+            shift = np.array(max_idx) - center
+            aligned = ndimage.shift(rotated, shift, order=1)
+            corr = np.corrcoef(reference.flatten(), aligned.flatten())[0, 1]
+            
+            if corr > best_corr:
+                best_corr = corr
+                best_aligned = aligned.copy()
+                best_params['angle'] = angle
+                best_params['shift'] = shift.tolist()
+                best_params['correlation'] = corr
+    
+    return best_aligned, best_params
+
+
 def reconstruct_with_affinity_output(
     pipeline,
     particles: np.ndarray,
     batch_size: int = 8,
     num_samples: int = 1,
+    box_size: int = 48,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Reconstruct particles using affinity output (Gaussian splats without final convolution).
@@ -84,6 +180,8 @@ def reconstruct_with_affinity_output(
         Batch size for inference
     num_samples : int
         Number of reconstructions per particle (for uncertainty)
+    box_size : int
+        Target box size for reconstruction
         
     Returns
     -------
@@ -133,6 +231,7 @@ def reconstruct_with_affinity_output(
                     identity_global_weight = torch.ones(1, 1, device=pipeline.device)
                     
                     # Get reconstruction without final convolution (affinity output)
+                    # CRITICAL: use_final_convolution=False gives us the Gaussian splats
                     reconstruction = pipeline.model.decoder(
                         mu, identity_pose, identity_global_weight,
                         use_final_convolution=False
@@ -142,12 +241,14 @@ def reconstruct_with_affinity_output(
                     reconstruction_np = reconstruction.cpu().numpy()[0, 0]
                     
                     # Crop to original size if needed
-                    if reconstruction_np.shape != noisy_particle.shape:
-                        reconstruction_np = crop_to_size(reconstruction_np, noisy_particle.shape)
+                    if reconstruction_np.shape != (box_size, box_size, box_size):
+                        reconstruction_np = crop_to_size(reconstruction_np, (box_size, box_size, box_size))
                     
                     # Denormalize
                     reconstruction_np = denormalize_volume(reconstruction_np, norm_stats)
                 
+                # IMPORTANT: Don't invert when using splats only
+                # (only invert when using full pipeline with final convolution)
                 batch_results.append(reconstruction_np)
             
             batch_recons.append(np.stack(batch_results))
@@ -199,99 +300,83 @@ def calculate_fsc(
     resolution_at_half : float
         Resolution at FSC=0.5 (Angstroms)
     """
-    # Ensure volumes have the same size by cropping to smaller dimensions
+    # Ensure volumes have the same size
     if volume1.shape != volume2.shape:
         target_shape = tuple(min(s1, s2) for s1, s2 in zip(volume1.shape, volume2.shape))
         volume1 = crop_to_size(volume1, target_shape)
         volume2 = crop_to_size(volume2, target_shape)
         print(f"Cropped volumes to {target_shape} for FSC")
     
-    # Apply spherical mask if requested
-    if mask_radius is not None:
-        center = np.array(volume1.shape) // 2
-        z, y, x = np.ogrid[:volume1.shape[0], :volume1.shape[1], :volume1.shape[2]]
-        dist = np.sqrt((x - center[2])**2 + (y - center[1])**2 + (z - center[0])**2)
-        
-        # Soft Gaussian mask
-        edge_width = 3
-        mask = np.exp(-0.5 * ((dist - mask_radius) / edge_width)**2)
-        mask[dist <= mask_radius] = 1.0
-        mask[dist > mask_radius + 3*edge_width] = 0.0
-        
-        volume1 = volume1 * mask
-        volume2 = volume2 * mask
+    # Apply soft mask (CRITICAL for good FSC)
+    if mask_radius is None:
+        mask_radius = volume1.shape[0] // 2 - 5
     
-    # Compute 3D FFT (non-shifted)
-    fft1 = np.fft.fftn(volume1)
-    fft2 = np.fft.fftn(volume2)
+    volume1 = apply_soft_mask(volume1, radius=mask_radius, soft_edge=5)
+    volume2 = apply_soft_mask(volume2, radius=mask_radius, soft_edge=5)
     
-    # Get volume dimensions
+    # Compute 3D FFT
+    fft1 = fftshift(fftn(volume1))
+    fft2 = fftshift(fftn(volume2))
+    
+    # Get dimensions
     nz, ny, nx = volume1.shape
+    center = np.array([nz//2, ny//2, nx//2])
     
-    # Create index grids in real space
-    z_idx = np.arange(nz)
-    y_idx = np.arange(ny)
-    x_idx = np.arange(nx)
+    # Create radial distance map
+    z, y, x = np.ogrid[:nz, :ny, :nx]
+    r = np.sqrt((z - center[0])**2 + (y - center[1])**2 + (x - center[2])**2)
     
-    # Create 3D meshgrid of indices
-    zz, yy, xx = np.meshgrid(z_idx, y_idx, x_idx, indexing='ij')
+    max_radius = min(center)
+    n_shells = int(max_radius)
     
-    # Calculate distance from DC component
-    zz_freq = np.where(zz < nz//2, zz, zz - nz)
-    yy_freq = np.where(yy < ny//2, yy, yy - ny)
-    xx_freq = np.where(xx < nx//2, xx, xx - nx)
+    fsc_values = []
+    resolutions = []
     
-    # Radial distance in frequency space
-    freq_radius = np.sqrt(zz_freq**2 + yy_freq**2 + xx_freq**2)
-    
-    # Maximum useful radius is Nyquist
-    max_radius = min(nz, ny, nx) // 2
-    
-    # Calculate FSC for each shell
-    fsc = np.zeros(max_radius)
-    
-    for i in range(max_radius):
-        # Select voxels in this shell
-        shell_mask = (freq_radius >= i) & (freq_radius < i + 1)
-        n_voxels = np.sum(shell_mask)
-        
-        if n_voxels == 0:
+    for i in range(1, n_shells):
+        mask = (r >= i - 0.5) & (r < i + 0.5)
+        if np.sum(mask) < 10:
             continue
         
-        # Get FFT values in this shell
-        fft1_shell = fft1[shell_mask]
-        fft2_shell = fft2[shell_mask]
+        fft1_shell = fft1[mask]
+        fft2_shell = fft2[mask]
         
-        # Calculate correlation
-        numerator = np.abs(np.sum(fft1_shell * np.conj(fft2_shell)))
-        denom1 = np.sum(np.abs(fft1_shell)**2)
-        denom2 = np.sum(np.abs(fft2_shell)**2)
+        numerator = np.real(np.sum(fft1_shell * np.conj(fft2_shell)))
+        denominator = np.sqrt(np.sum(np.abs(fft1_shell)**2) * np.sum(np.abs(fft2_shell)**2))
         
-        if denom1 > 0 and denom2 > 0:
-            fsc[i] = numerator / np.sqrt(denom1 * denom2)
+        fsc = numerator / denominator if denominator > 0 else 0
+        fsc_values.append(fsc)
+        
+        resolution = (nx * voxel_size) / (2.0 * i)
+        resolutions.append(resolution)
     
-    # Convert to resolution in Angstroms
-    resolution_angstroms = np.zeros(max_radius)
-    for i in range(max_radius):
-        if i == 0:
-            resolution_angstroms[i] = 1000.0
+    fsc_array = np.array(fsc_values)
+    res_array = np.array(resolutions)
+    
+    # Find resolution at FSC=0.5 using linear interpolation
+    resolution_at_half = res_array[0] if len(res_array) > 0 else 240.0
+    
+    if len(fsc_array) > 1:
+        idx_above = np.where(fsc_array >= 0.5)[0]
+        idx_below = np.where(fsc_array < 0.5)[0]
+        
+        if len(idx_above) > 0 and len(idx_below) > 0:
+            idx1 = idx_above[-1]
+            idx2 = idx_below[0]
+            
+            if idx2 == idx1 + 1:
+                fsc1, fsc2 = fsc_array[idx1], fsc_array[idx2]
+                res1, res2 = res_array[idx1], res_array[idx2]
+                
+                t = (0.5 - fsc1) / (fsc2 - fsc1)
+                resolution_at_half = res1 + t * (res2 - res1)
+            else:
+                resolution_at_half = res_array[idx_below[0]]
+        elif len(idx_below) > 0:
+            resolution_at_half = res_array[0]
         else:
-            box_size_angstroms = nx * voxel_size
-            resolution_angstroms[i] = box_size_angstroms / i
+            resolution_at_half = res_array[-1] if len(res_array) > 0 else 240.0
     
-    # Find resolution at FSC = 0.5
-    idx_half = np.where(fsc < 0.5)[0]
-    if len(idx_half) > 0:
-        idx = idx_half[0]
-        if idx > 0 and fsc[idx-1] > 0.5:
-            frac = (0.5 - fsc[idx]) / (fsc[idx-1] - fsc[idx])
-            resolution_at_half = resolution_angstroms[idx] - frac * (resolution_angstroms[idx] - resolution_angstroms[idx-1])
-        else:
-            resolution_at_half = resolution_angstroms[idx] if idx < len(resolution_angstroms) else resolution_angstroms[-1]
-    else:
-        resolution_at_half = 2 * voxel_size
-    
-    return resolution_angstroms, fsc, resolution_at_half
+    return res_array, fsc_array, resolution_at_half
 
 
 def save_results(
@@ -302,6 +387,7 @@ def save_results(
     std_reconstructions: Optional[np.ndarray] = None,
     ground_truth: Optional[np.ndarray] = None,
     num_samples: int = 1,
+    n_alignment_angles: int = 24,
 ):
     """
     Save reconstruction results.
@@ -322,6 +408,8 @@ def save_results(
         Ground truth structure for FSC
     num_samples : int
         Number of samples used per particle
+    n_alignment_angles : int
+        Number of angles for alignment search
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -329,8 +417,27 @@ def save_results(
     
     print(f"\nSaving results to {output_dir}")
     
-    # Average across all particles
-    global_mean = mean_reconstructions.mean(axis=0)
+    # Process reconstructions with alignment if ground truth provided
+    if ground_truth is not None:
+        print("\nAligning reconstructions to ground truth...")
+        
+        # Normalize ground truth
+        gt_normalized = normalize_volume_zscore(ground_truth)
+        gt_masked = apply_soft_mask(gt_normalized, radius=22, soft_edge=5)
+        
+        # Align all reconstructions
+        aligned_reconstructions = []
+        for recon in tqdm(mean_reconstructions, desc="Aligning"):
+            recon_normalized = normalize_volume_zscore(recon)
+            recon_masked = apply_soft_mask(recon_normalized, radius=22, soft_edge=5)
+            aligned, _ = align_to_reference(gt_masked, recon_masked, n_alignment_angles, refine=True)
+            aligned_reconstructions.append(aligned)
+        
+        # Average aligned reconstructions
+        global_mean = np.mean(aligned_reconstructions, axis=0)
+    else:
+        # Simple average without alignment
+        global_mean = mean_reconstructions.mean(axis=0)
     
     # Save mean reconstruction
     mean_path = output_dir / f'{structure_name}_affinity_mean_reconstruction.mrc'
@@ -358,75 +465,11 @@ def save_results(
     }
     
     if ground_truth is not None:
-        print("\nAligning and calculating FSC with ground truth...")
-        
-        # Crop ground truth if needed
-        if ground_truth.shape != global_mean.shape:
-            ground_truth = crop_to_size(ground_truth, global_mean.shape)
-            print(f"Cropped ground truth to {ground_truth.shape}")
-        
-        # Check if reconstruction is inverted
-        corr_normal = np.corrcoef(global_mean.flatten(), ground_truth.flatten())[0, 1]
-        corr_inverted = np.corrcoef(-global_mean.flatten(), ground_truth.flatten())[0, 1]
-        
-        if corr_inverted > corr_normal:
-            print(f"Inverting reconstruction (correlation improved: {corr_normal:.3f} -> {corr_inverted:.3f})")
-            recon_for_alignment = -global_mean
-        else:
-            print(f"Using reconstruction as-is (correlation: {corr_normal:.3f})")
-            recon_for_alignment = global_mean
-        
-        # Align reconstruction to ground truth
-        from scipy import ndimage
-        
-        # Normalize both volumes
-        recon_norm = (recon_for_alignment - recon_for_alignment.mean()) / (recon_for_alignment.std() + 1e-10)
-        gt_norm = (ground_truth - ground_truth.mean()) / (ground_truth.std() + 1e-10)
-        
-        # Cross-correlation search
-        best_corr = -np.inf
-        best_aligned = None
-        best_angle = 0
-        best_axis = 0
-        
-        print("Searching for best alignment...")
-        
-        # Coarse search
-        angles_coarse = np.linspace(0, 360, 36, endpoint=False)
-        
-        for axis in [0, 1, 2]:
-            for angle in tqdm(angles_coarse, desc=f"Axis {axis}", leave=False):
-                rotated = ndimage.rotate(recon_norm, angle, axes=((axis+1)%3, (axis+2)%3), 
-                                        reshape=False, order=1)
-                corr = np.sum(rotated * gt_norm)
-                
-                if corr > best_corr:
-                    best_corr = corr
-                    best_angle = angle
-                    best_axis = axis
-        
-        # Fine search
-        angles_fine = np.linspace(best_angle - 15, best_angle + 15, 31)
-        for angle in angles_fine:
-            rotated = ndimage.rotate(recon_norm, angle, axes=((best_axis+1)%3, (best_axis+2)%3),
-                                    reshape=False, order=1)
-            corr = np.sum(rotated * gt_norm)
-            if corr > best_corr:
-                best_corr = corr
-                best_angle = angle
-        
-        # Apply best rotation
-        best_aligned = ndimage.rotate(recon_for_alignment, best_angle,
-                                     axes=((best_axis+1)%3, (best_axis+2)%3),
-                                     reshape=False, order=3)
-        
-        print(f"Best alignment: rotation {best_angle:.1f}° around axis {best_axis}")
-        print(f"Correlation after alignment: {best_corr:.3f}")
+        print("\nCalculating FSC with ground truth...")
         
         # Calculate FSC
-        mask_radius = global_mean.shape[0] // 2 - 5
         resolution_angstroms, fsc, resolution_at_half = calculate_fsc(
-            global_mean, ground_truth, voxel_spacing, mask_radius
+            global_mean, ground_truth, voxel_spacing
         )
         
         # Save FSC curve
@@ -476,21 +519,28 @@ def save_results(
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig, axes = plt.subplots(1, 3 if ground_truth is None else 2, 3, figsize=(15, 10 if ground_truth is not None else 5))
+    if ground_truth is None:
+        axes = axes.reshape(1, -1)
     
-    display_recon = locals().get('aligned_recon', global_mean)
-    center = display_recon.shape[0] // 2
+    center = global_mean.shape[0] // 2
+    
+    def normalize_for_display(vol):
+        vmin, vmax = np.percentile(vol, [2, 98])
+        if vmax == vmin:
+            vmax = vmin + 1
+        return np.clip((vol - vmin) / (vmax - vmin), 0, 1)
     
     # Reconstruction views
-    axes[0, 0].imshow(display_recon[center, :, :], cmap='gray')
+    axes[0, 0].imshow(normalize_for_display(global_mean[center, :, :]), cmap='gray')
     axes[0, 0].set_title('Affinity Reconstruction XY', fontsize=12, fontweight='bold')
     axes[0, 0].axis('off')
     
-    axes[0, 1].imshow(display_recon[:, center, :], cmap='gray')
+    axes[0, 1].imshow(normalize_for_display(global_mean[:, center, :]), cmap='gray')
     axes[0, 1].set_title('Affinity Reconstruction XZ', fontsize=12, fontweight='bold')
     axes[0, 1].axis('off')
     
-    axes[0, 2].imshow(display_recon[:, :, center], cmap='gray')
+    axes[0, 2].imshow(normalize_for_display(global_mean[:, :, center]), cmap='gray')
     axes[0, 2].set_title('Affinity Reconstruction YZ', fontsize=12, fontweight='bold')
     axes[0, 2].axis('off')
     
@@ -502,20 +552,17 @@ def save_results(
         
         center_gt = ground_truth_cropped.shape[0] // 2
         
-        axes[1, 0].imshow(ground_truth_cropped[center_gt, :, :], cmap='gray')
+        axes[1, 0].imshow(normalize_for_display(ground_truth_cropped[center_gt, :, :]), cmap='gray')
         axes[1, 0].set_title('Ground Truth XY', fontsize=12, fontweight='bold')
         axes[1, 0].axis('off')
         
-        axes[1, 1].imshow(ground_truth_cropped[:, center_gt, :], cmap='gray')
+        axes[1, 1].imshow(normalize_for_display(ground_truth_cropped[:, center_gt, :]), cmap='gray')
         axes[1, 1].set_title('Ground Truth XZ', fontsize=12, fontweight='bold')
         axes[1, 1].axis('off')
         
-        axes[1, 2].imshow(ground_truth_cropped[:, :, center_gt], cmap='gray')
+        axes[1, 2].imshow(normalize_for_display(ground_truth_cropped[:, :, center_gt]), cmap='gray')
         axes[1, 2].set_title('Ground Truth YZ', fontsize=12, fontweight='bold')
         axes[1, 2].axis('off')
-    else:
-        for ax in axes[1, :]:
-            ax.axis('off')
     
     plt.suptitle(f'{structure_name} - Orthogonal Views (Affinity Output)', fontsize=16, fontweight='bold')
     plt.tight_layout()
@@ -588,6 +635,12 @@ def main():
         default=1,
         help='Number of reconstructions per particle for uncertainty (default: 1)',
     )
+    parser.add_argument(
+        '--n-alignment-angles',
+        type=int,
+        default=24,
+        help='Number of angles for alignment search (default: 24)',
+    )
     
     # Output options
     parser.add_argument(
@@ -630,9 +683,11 @@ def main():
     
     structure_name = metadata['structure']
     voxel_spacing = metadata.get('voxel_spacing', 10.0)
+    box_size = particles.shape[1]  # Assume cubic
     
     print(f"Loaded {len(particles)} particles for {structure_name}")
     print(f"Voxel spacing: {voxel_spacing} Å")
+    print(f"Box size: {box_size}^3")
     
     # Load ground truth if provided
     ground_truth = None
@@ -640,9 +695,14 @@ def main():
         print(f"\nLoading ground truth from: {args.ground_truth}")
         with mrcfile.open(args.ground_truth) as mrc:
             ground_truth = mrc.data.copy()
+            # Crop to match box size if needed
+            if ground_truth.shape != (box_size, box_size, box_size):
+                ground_truth = crop_to_size(ground_truth, (box_size, box_size, box_size))
     
     # Reconstruct using affinity output
     print(f"\nReconstructing {len(particles)} particles using affinity output (Gaussian splats)...")
+    print("CRITICAL: Using use_final_convolution=False to get Gaussian splats")
+    print("CRITICAL: NOT inverting reconstructions (only invert for full pipeline)")
     if args.num_samples > 1:
         print(f"Using {args.num_samples} samples per particle for uncertainty estimation")
     
@@ -651,6 +711,7 @@ def main():
         particles=particles,
         batch_size=args.batch_size,
         num_samples=args.num_samples,
+        box_size=box_size,
     )
     
     # Save results
@@ -663,6 +724,7 @@ def main():
         std_reconstructions=std_recons,
         ground_truth=ground_truth,
         num_samples=args.num_samples,
+        n_alignment_angles=args.n_alignment_angles,
     )
     
     print("Reconstruction complete!")
