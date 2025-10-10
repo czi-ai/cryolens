@@ -14,6 +14,13 @@ Reconstruct from extracted particles:
         --checkpoint-epoch 2600 \\
         --output ./reconstructions/
 
+Reconstruct with affinity output only (Gaussian splats):
+    python reconstruct_particles.py \\
+        --particles ./example_data/ribosome_particles.zarr \\
+        --checkpoint-epoch 2600 \\
+        --use-affinity-only \\
+        --output ./reconstructions/
+
 Reconstruct with uncertainty estimation:
     python reconstruct_particles.py \\
         --particles ./example_data/ribosome_particles.zarr \\
@@ -46,6 +53,24 @@ except ImportError:
     sys.exit(1)
 
 from cryolens.inference.pipeline import create_inference_pipeline
+from cryolens.utils.normalization import normalize_volume, denormalize_volume
+
+
+def crop_to_size(volume: np.ndarray, target_shape: Tuple[int, ...]) -> np.ndarray:
+    """Crop volume to target shape from center."""
+    if volume.shape == target_shape:
+        return volume
+    
+    crop_slices = []
+    for actual, target in zip(volume.shape, target_shape):
+        if actual > target:
+            start = (actual - target) // 2
+            end = start + target
+            crop_slices.append(slice(start, end))
+        else:
+            crop_slices.append(slice(None))
+    
+    return volume[tuple(crop_slices)]
 
 
 def reconstruct_with_uncertainty(
@@ -53,6 +78,8 @@ def reconstruct_with_uncertainty(
     particles: np.ndarray,
     batch_size: int = 8,
     num_samples: int = 1,
+    use_affinity_only: bool = False,
+    box_size: int = 48,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Reconstruct particles with optional uncertainty estimation.
@@ -67,6 +94,10 @@ def reconstruct_with_uncertainty(
         Batch size for inference
     num_samples : int
         Number of reconstructions per particle (for uncertainty)
+    use_affinity_only : bool
+        If True, use only affinity output (Gaussian splats without final convolution)
+    box_size : int
+        Target box size
         
     Returns
     -------
@@ -95,14 +126,49 @@ def reconstruct_with_uncertainty(
                 else:
                     noisy_particle = particle
                 
-                # Reconstruct
-                result = pipeline.process_volume(
-                    noisy_particle,
-                    return_embeddings=False,
-                    return_reconstruction=True,
-                    use_identity_pose=True
-                )
-                batch_results.append(result['reconstruction'])
+                if use_affinity_only:
+                    # Use affinity output only (Gaussian splats without final convolution)
+                    normalized, norm_stats = normalize_volume(
+                        noisy_particle,
+                        method=pipeline.normalization_method,
+                        return_stats=True
+                    )
+                    
+                    volume_tensor = torch.tensor(normalized, dtype=torch.float32)
+                    volume_tensor = volume_tensor.unsqueeze(0).unsqueeze(0).to(pipeline.device)
+                    
+                    with torch.no_grad():
+                        mu, log_var, pose, global_weight = pipeline.model.encode(volume_tensor)
+                        
+                        identity_pose = torch.zeros(1, 4, device=pipeline.device)
+                        identity_pose[:, 0] = 1.0
+                        identity_global_weight = torch.ones(1, 1, device=pipeline.device)
+                        
+                        # CRITICAL: use_final_convolution=False gives us Gaussian splats
+                        reconstruction = pipeline.model.decoder(
+                            mu, identity_pose, identity_global_weight,
+                            use_final_convolution=False
+                        )
+                        
+                        reconstruction_np = reconstruction.cpu().numpy()[0, 0]
+                        
+                        if reconstruction_np.shape != (box_size, box_size, box_size):
+                            reconstruction_np = crop_to_size(reconstruction_np, (box_size, box_size, box_size))
+                        
+                        reconstruction_np = denormalize_volume(reconstruction_np, norm_stats)
+                    
+                    # IMPORTANT: Don't invert when using affinity only
+                    batch_results.append(reconstruction_np)
+                else:
+                    # Use full pipeline with final convolution
+                    result = pipeline.process_volume(
+                        noisy_particle,
+                        return_embeddings=False,
+                        return_reconstruction=True,
+                        use_identity_pose=True
+                    )
+                    # Invert for full pipeline (dark becomes light)
+                    batch_results.append(-result['reconstruction'])
             
             batch_recons.append(np.stack(batch_results))
         
@@ -282,6 +348,7 @@ def save_results(
     std_reconstructions: Optional[np.ndarray] = None,
     ground_truth: Optional[np.ndarray] = None,
     num_samples: int = 1,
+    use_affinity_only: bool = False,
 ):
     """
     Save reconstruction results.
@@ -302,6 +369,8 @@ def save_results(
         Ground truth structure for FSC
     num_samples : int
         Number of samples used per particle
+    use_affinity_only : bool
+        Whether affinity-only mode was used
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -313,7 +382,8 @@ def save_results(
     global_mean = mean_reconstructions.mean(axis=0)
     
     # Save mean reconstruction
-    mean_path = output_dir / f'{structure_name}_mean_reconstruction.mrc'
+    suffix = "_affinity" if use_affinity_only else ""
+    mean_path = output_dir / f'{structure_name}{suffix}_mean_reconstruction.mrc'
     with mrcfile.new(str(mean_path), overwrite=True) as mrc:
         mrc.set_data(global_mean.astype(np.float32))
         mrc.voxel_size = voxel_spacing
@@ -323,7 +393,7 @@ def save_results(
     if std_reconstructions is not None:
         # Average uncertainty across particles
         global_uncertainty = std_reconstructions.mean(axis=0)
-        uncertainty_path = output_dir / f'{structure_name}_uncertainty.mrc'
+        uncertainty_path = output_dir / f'{structure_name}{suffix}_uncertainty.mrc'
         with mrcfile.new(str(uncertainty_path), overwrite=True) as mrc:
             mrc.set_data(global_uncertainty.astype(np.float32))
             mrc.voxel_size = voxel_spacing
@@ -335,6 +405,7 @@ def save_results(
         'n_particles': n_particles,
         'num_samples_per_particle': num_samples,
         'voxel_spacing': voxel_spacing,
+        'reconstruction_mode': 'affinity_only' if use_affinity_only else 'full_pipeline',
     }
     
     if ground_truth is not None:
@@ -434,7 +505,8 @@ def save_results(
         
         ax.set_xlabel('Resolution (Å)', fontsize=14, fontweight='bold')
         ax.set_ylabel('Fourier Shell Correlation', fontsize=14, fontweight='bold')
-        ax.set_title(f'{structure_name} FSC Curve', fontsize=16, fontweight='bold')
+        mode_label = "Affinity Output" if use_affinity_only else "Full Pipeline"
+        ax.set_title(f'{structure_name} FSC Curve ({mode_label})', fontsize=16, fontweight='bold')
         ax.grid(True, alpha=0.3, linestyle=':')
         ax.legend(fontsize=12, loc='upper right')
         ax.set_xlim([resolution_angstroms[-1], resolution_angstroms[0]])  # Reverse x-axis (high to low res)
@@ -447,7 +519,7 @@ def save_results(
                   label=f'Nyquist: {nyquist_res:.1f} Å', alpha=0.7)
         ax.legend(fontsize=12, loc='upper right')
         
-        fsc_plot_path = output_dir / f'{structure_name}_fsc.png'
+        fsc_plot_path = output_dir / f'{structure_name}{suffix}_fsc.png'
         plt.savefig(fsc_plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Saved: {fsc_plot_path}")
@@ -456,7 +528,7 @@ def save_results(
         results['nyquist_limit'] = float(nyquist_res)
         
         # Save FSC data
-        fsc_data_path = output_dir / f'{structure_name}_fsc.npz'
+        fsc_data_path = output_dir / f'{structure_name}{suffix}_fsc.npz'
         np.savez(fsc_data_path, 
                 resolution_angstroms=resolution_angstroms, 
                 fsc=fsc, 
@@ -517,22 +589,23 @@ def save_results(
         for ax in axes[1, :]:
             ax.axis('off')
     
-    plt.suptitle(f'{structure_name} - Orthogonal Views', fontsize=16, fontweight='bold')
+    mode_label = "Affinity Output" if use_affinity_only else "Full Pipeline"
+    plt.suptitle(f'{structure_name} - Orthogonal Views ({mode_label})', fontsize=16, fontweight='bold')
     plt.tight_layout()
     
-    ortho_path = output_dir / f'{structure_name}_orthoviews.png'
+    ortho_path = output_dir / f'{structure_name}{suffix}_orthoviews.png'
     plt.savefig(ortho_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {ortho_path}")
     
     # Save summary JSON
-    summary_path = output_dir / f'{structure_name}_summary.json'
+    summary_path = output_dir / f'{structure_name}{suffix}_summary.json'
     with open(summary_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"Saved: {summary_path}")
     
     print(f"\n{'='*60}")
-    print(f"Summary for {structure_name}:")
+    print(f"Summary for {structure_name} ({mode_label}):")
     print(f"  Particles: {n_particles}")
     print(f"  Samples per particle: {num_samples}")
     if ground_truth is not None:
@@ -588,6 +661,11 @@ def main():
         default=1,
         help='Number of reconstructions per particle for uncertainty (default: 1)',
     )
+    parser.add_argument(
+        '--use-affinity-only',
+        action='store_true',
+        help='Use only affinity output (Gaussian splats without final convolution)',
+    )
     
     # Output options
     parser.add_argument(
@@ -630,9 +708,11 @@ def main():
     
     structure_name = metadata['structure']
     voxel_spacing = metadata.get('voxel_spacing', 10.0)
+    box_size = particles.shape[1]  # Assume cubic
     
     print(f"Loaded {len(particles)} particles for {structure_name}")
     print(f"Voxel spacing: {voxel_spacing} Å")
+    print(f"Box size: {box_size}^3")
     
     # Load ground truth if provided
     ground_truth = None
@@ -640,9 +720,18 @@ def main():
         print(f"\nLoading ground truth from: {args.ground_truth}")
         with mrcfile.open(args.ground_truth) as mrc:
             ground_truth = mrc.data.copy()
+            if ground_truth.shape != (box_size, box_size, box_size):
+                ground_truth = crop_to_size(ground_truth, (box_size, box_size, box_size))
     
     # Reconstruct with uncertainty estimation
     print(f"\nReconstructing {len(particles)} particles...")
+    if args.use_affinity_only:
+        print("Mode: Affinity output only (Gaussian splats without final convolution)")
+        print("CRITICAL: NOT inverting reconstructions")
+    else:
+        print("Mode: Full pipeline (with final convolution)")
+        print("CRITICAL: Inverting reconstructions")
+    
     if args.num_samples > 1:
         print(f"Using {args.num_samples} samples per particle for uncertainty estimation")
     
@@ -651,6 +740,8 @@ def main():
         particles=particles,
         batch_size=args.batch_size,
         num_samples=args.num_samples,
+        use_affinity_only=args.use_affinity_only,
+        box_size=box_size,
     )
     
     # Save results
@@ -663,6 +754,7 @@ def main():
         std_reconstructions=std_recons,
         ground_truth=ground_truth,
         num_samples=args.num_samples,
+        use_affinity_only=args.use_affinity_only,
     )
     
     print("Reconstruction complete!")
