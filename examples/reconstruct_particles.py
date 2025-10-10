@@ -153,13 +153,21 @@ def calculate_fsc(
     resolution : float
         Resolution at FSC=0.5 (Angstroms)
     """
-    # Ensure volumes have the same size
+    # Ensure volumes have the same size by cropping to smaller dimensions
     if volume1.shape != volume2.shape:
-        # Resize volume2 to match volume1
-        from scipy import ndimage
-        zoom_factors = np.array(volume1.shape) / np.array(volume2.shape)
-        volume2 = ndimage.zoom(volume2, zoom_factors, order=3)
-        print(f"Resized ground truth from {volume2.shape} to {volume1.shape} for FSC calculation")
+        target_shape = tuple(min(s1, s2) for s1, s2 in zip(volume1.shape, volume2.shape))
+        
+        def crop_center(volume, target_shape):
+            """Crop volume to target shape from center."""
+            starts = tuple((s - t) // 2 for s, t in zip(volume.shape, target_shape))
+            slices = tuple(slice(start, start + t) for start, t in zip(starts, target_shape))
+            return volume[slices]
+        
+        orig_shape1 = volume1.shape
+        orig_shape2 = volume2.shape
+        volume1 = crop_center(volume1, target_shape)
+        volume2 = crop_center(volume2, target_shape)
+        print(f"Cropped volumes for FSC: {orig_shape1} and {orig_shape2} -> {target_shape}")
     
     # Apply spherical mask if requested
     if mask_radius is not None:
