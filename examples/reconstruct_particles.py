@@ -192,7 +192,7 @@ def calculate_fsc(
     # Create index grids in real space
     z_idx = np.arange(nz)
     y_idx = np.arange(ny)
-    x_idx = np.arange(x)
+    x_idx = np.arange(nx)
     
     # Create 3D meshgrid of indices
     zz, yy, xx = np.meshgrid(z_idx, y_idx, x_idx, indexing='ij')
