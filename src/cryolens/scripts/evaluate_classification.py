@@ -559,9 +559,11 @@ def main():
         if key == 'significance':
             results_serializable[key] = value
         else:
+            # Skip predictions (not needed in saved results)
             results_serializable[key] = {
                 k: (v.tolist() if isinstance(v, np.ndarray) else v)
                 for k, v in value.items()
+                if k not in ['predictions', 'label_encoder']
             }
     
     with open(output_json, 'w') as f:

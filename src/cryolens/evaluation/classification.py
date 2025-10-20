@@ -94,7 +94,9 @@ def stratified_cross_validation(
             if le is not None:
                 y_test_labels = [original_labels[i] for i in test_idx]
                 y_pred_labels = le.inverse_transform(y_pred)
-                predictions.append((y_test_labels, y_pred_labels, y_scores, clf.classes_))
+                # Convert clf.classes_ (encoded) to original string labels
+                clf_classes_str = le.inverse_transform(clf.classes_)
+                predictions.append((y_test_labels, y_pred_labels, y_scores, clf_classes_str))
             else:
                 predictions.append((y_test, y_pred, y_scores, clf.classes_))
         
