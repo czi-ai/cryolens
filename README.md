@@ -7,6 +7,7 @@ CryoLens is a generative model and toolkit for 3D reconstruction of molecular st
 - **Generative modeling**: VAE-based architecture for learning molecular structure representations
 - **3D reconstruction**: Reconstruct molecular structures from cryoET particle data
 - **Evaluation metrics**: Comprehensive metrics for embeddings, reconstructions, and poses
+- **Classification evaluation**: Statistical validation for classification tasks with cross-validation
 - **Pose analysis**: Utilities for 3D rotation analysis and alignment
 - **Inference server**: FastAPI-based server for model inference
 - **Gaussian splats**: Extract Gaussian splat representations for visualization
@@ -63,6 +64,28 @@ print(f"Embedding diversity: {diversity:.2f}")
 # Analyze class overlap with Mahalanobis distance
 overlap_matrix, classes = compute_mahalanobis_overlap(embeddings, labels)
 ```
+
+### Classification Evaluation
+
+Evaluate classification performance with proper statistical validation:
+
+```bash
+# Create a configuration file
+cp examples/classification_config.yaml my_classification_config.yaml
+# Edit my_classification_config.yaml with your embedding paths
+
+# Run evaluation with 10-fold cross-validation
+python -m cryolens.scripts.evaluate_classification \
+    --config my_classification_config.yaml \
+    --output-dir ./results/classification/ \
+    --n-folds 10
+```
+
+This will generate:
+- `classification_results.json` - All metrics with error bars and statistical significance
+- `classification_performance.png` - Comprehensive figure with overall and per-class results
+
+See `examples/classification_config.yaml` for configuration options.
 
 ### Reconstruction Quality Metrics
 

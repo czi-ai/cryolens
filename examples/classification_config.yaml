@@ -1,0 +1,16 @@
+# Classification evaluation configuration
+#
+# This configuration file specifies paths to embedding files for classification evaluation.
+# Copy this file and edit the paths to match your data locations.
+
+# Path to CryoLens embeddings (HDF5 format with 'embeddings' group)
+cryolens_embeddings: /path/to/cryolens/embeddings.h5
+
+# Path to TomoTwin embeddings (Parquet format)
+tomotwin_embeddings: /path/to/tomotwin/embeddings.parquet
+
+# Path to TomoTwin coordinates (CSV format with 'protein' and 'filepath' columns)
+tomotwin_coords: /path/to/tomotwin/coords.csv
+
+# Random seed for reproducibility (default: 171717)
+random_seed: 171717
