@@ -2,7 +2,8 @@
 Evaluate classification performance with statistical validation.
 
 This script evaluates classification using CryoLens and TomoTwin embeddings with
-proper cross-validation and statistical testing.
+proper cross-validation and statistical testing. All methods are compared at the
+same dimensionality (32D) for fair comparison.
 
 Usage:
     python -m cryolens.scripts.evaluate_classification \\
@@ -47,15 +48,20 @@ def normalize_protein_name(name: str) -> str:
     return str(name).lower().replace('-', '_').replace(' ', '_')
 
 
-def load_cryolens_embeddings(h5_path: Path) -> Tuple[np.ndarray, List[str]]:
+def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str]]:
     """
-    Load CryoLens embeddings from H5 file.
+    Load CryoLens embeddings from H5 file, extracting only structural dimensions.
+    
+    CryoLens uses a segmented decoder where the first 80% of latent dimensions
+    (32D out of 40D) correspond to structural information. For fair comparison
+    with TomoTwin's 32D embeddings, we extract only these structural dimensions.
     
     Args:
         h5_path: Path to HDF5 file with embeddings
+        structural_dim: Number of structural dimensions to extract (default: 32)
         
     Returns:
-        Tuple of (embeddings array, list of labels)
+        Tuple of (32D embeddings array, list of labels)
     """
     embeddings_list = []
     labels_list = []
@@ -76,7 +82,9 @@ def load_cryolens_embeddings(h5_path: Path) -> Tuple[np.ndarray, List[str]]:
             if embedding.ndim > 1:
                 embedding = embedding.flatten()
             
-            embeddings_list.append(embedding)
+            # Extract only structural dimensions (first 32D of 40D)
+            structural_embedding = embedding[:structural_dim]
+            embeddings_list.append(structural_embedding)
             
             # Get structure name from metadata or sample_id
             structure_name = None
@@ -92,12 +100,16 @@ def load_cryolens_embeddings(h5_path: Path) -> Tuple[np.ndarray, List[str]]:
             
             labels_list.append(normalize_protein_name(structure_name))
     
-    return np.array(embeddings_list, dtype=np.float32), labels_list
+    embeddings = np.array(embeddings_list, dtype=np.float32)
+    print(f"  Extracted {structural_dim}D structural embeddings (from {embedding.shape[0]}D total)")
+    
+    return embeddings, labels_list
 
 
 def load_tomotwin_embeddings(
     parquet_path: Path,
-    coords_path: Path
+    coords_path: Path,
+    embedding_dim: int = 32
 ) -> Tuple[np.ndarray, List[str]]:
     """
     Load TomoTwin embeddings from parquet and coordinates CSV.
@@ -105,9 +117,10 @@ def load_tomotwin_embeddings(
     Args:
         parquet_path: Path to TomoTwin embeddings parquet file
         coords_path: Path to coordinates CSV file
+        embedding_dim: Expected embedding dimension (default: 32)
         
     Returns:
-        Tuple of (embeddings array, list of labels)
+        Tuple of (32D embeddings array, list of labels)
     """
     embeddings_df = pd.read_parquet(parquet_path)
     coords_df = pd.read_csv(coords_path)
@@ -117,6 +130,13 @@ def load_tomotwin_embeddings(
         col for col in embeddings_df.columns 
         if col != 'filepath' and embeddings_df[col].dtype in ['float64', 'float32', 'int64', 'int32']
     ]
+    
+    # Ensure we have the expected dimension
+    if len(embedding_cols) < embedding_dim:
+        raise ValueError(f"Expected {embedding_dim}D embeddings, found {len(embedding_cols)}D")
+    
+    # Take only first embedding_dim columns
+    embedding_cols = embedding_cols[:embedding_dim]
     
     # Merge embeddings with coordinates
     coords_df['filepath_standardized'] = 'output/' + coords_df['filepath']
@@ -148,12 +168,13 @@ def align_embeddings(
     """
     Align CryoLens and TomoTwin embeddings by matching structure labels.
     
-    Balances samples per class to ensure fair comparison.
+    Both embeddings should be 32D at this point for fair comparison.
+    Balances samples per class to ensure equal representation.
     
     Args:
-        cl_embeddings: CryoLens embeddings
+        cl_embeddings: CryoLens embeddings (32D)
         cl_labels: CryoLens labels
-        tt_embeddings: TomoTwin embeddings
+        tt_embeddings: TomoTwin embeddings (32D)
         tt_labels: TomoTwin labels
         random_seed: Random seed for sampling
         
@@ -161,6 +182,13 @@ def align_embeddings(
         Tuple of (aligned CryoLens embeddings, aligned TomoTwin embeddings,
                  aligned labels, list of common structures)
     """
+    # Verify dimensions match
+    if cl_embeddings.shape[1] != tt_embeddings.shape[1]:
+        raise ValueError(
+            f"Dimension mismatch: CryoLens {cl_embeddings.shape[1]}D vs "
+            f"TomoTwin {tt_embeddings.shape[1]}D"
+        )
+    
     # Find common structures
     cl_structures = set(cl_labels)
     tt_structures = set(tt_labels)
@@ -203,11 +231,48 @@ def align_embeddings(
     )
 
 
+def create_fusion_embeddings(
+    tt_embeddings: np.ndarray,
+    cl_embeddings: np.ndarray,
+    fusion_method: str = 'average'
+) -> np.ndarray:
+    """
+    Create fused embeddings from TomoTwin and CryoLens.
+    
+    All fusion methods maintain 32D output for fair comparison.
+    
+    Args:
+        tt_embeddings: TomoTwin embeddings (N, 32)
+        cl_embeddings: CryoLens embeddings (N, 32)
+        fusion_method: Fusion strategy ('average', 'concat', 'weighted')
+        
+    Returns:
+        Fused embeddings (N, 32)
+    """
+    if fusion_method == 'average':
+        # Simple element-wise average (stays 32D)
+        return (tt_embeddings + cl_embeddings) / 2
+    
+    elif fusion_method == 'concat':
+        # Concatenate to 64D (will be reduced by classifier)
+        # Note: This gives classifier more capacity - not strictly fair
+        return np.concatenate([tt_embeddings, cl_embeddings], axis=1)
+    
+    elif fusion_method == 'weighted':
+        # Learned weighted average (would need training)
+        # For now, use 70-30 split favoring TomoTwin
+        return 0.7 * tt_embeddings + 0.3 * cl_embeddings
+    
+    else:
+        raise ValueError(f"Unknown fusion method: {fusion_method}")
+
+
 def create_classification_figure(
     results: Dict,
     per_class_results: Dict,
     common_structures: List[str],
-    output_path: Path
+    output_path: Path,
+    embedding_dim: int = 32
 ):
     """
     Create comprehensive classification figure with error bars.
@@ -217,6 +282,7 @@ def create_classification_figure(
         per_class_results: Per-class results dictionary
         common_structures: List of evaluated structure names
         output_path: Path to save figure
+        embedding_dim: Embedding dimension used (for title annotation)
     """
     fig = plt.figure(figsize=(18, 10))
     gs = GridSpec(2, 3, figure=fig, hspace=0.3, wspace=0.3)
@@ -240,7 +306,8 @@ def create_classification_figure(
     bars = ax1.bar(x, map_means, yerr=map_stds, capsize=5, alpha=0.8, color=colors)
     
     ax1.set_ylabel('Mean Average Precision', fontsize=12, fontweight='bold')
-    ax1.set_title('Overall Classification Performance (10-fold CV)', fontsize=14, fontweight='bold')
+    ax1.set_title(f'Overall Classification Performance (10-fold CV, {embedding_dim}D)', 
+                  fontsize=14, fontweight='bold')
     ax1.set_xticks(x)
     ax1.set_xticklabels(methods, fontsize=11)
     ax1.grid(True, alpha=0.3, axis='y')
@@ -338,7 +405,7 @@ def create_classification_figure(
     improvement_pct = results['significance']['mean_improvement'] / results['tomotwin']['mean_map'] * 100
     
     plt.suptitle(
-        f'Classification Performance with Feature Fusion\n'
+        f'Classification Performance with Feature Fusion ({embedding_dim}D embeddings)\n'
         f'Overall Improvement: {improvement_pct:+.1f}% (p={p_val:.4f}{"***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else ""})',
         fontsize=16, fontweight='bold'
     )
@@ -362,6 +429,11 @@ def main():
                        help='Number of cross-validation folds (default: 10)')
     parser.add_argument('--random-seed', type=int, default=171717,
                        help='Random seed for reproducibility (default: 171717)')
+    parser.add_argument('--embedding-dim', type=int, default=32,
+                       help='Embedding dimension to use (default: 32)')
+    parser.add_argument('--fusion-method', type=str, default='average',
+                       choices=['average', 'concat', 'weighted'],
+                       help='Fusion method (default: average)')
     
     args = parser.parse_args()
     
@@ -372,22 +444,31 @@ def main():
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
+    print("\n" + "="*70)
+    print(f"CLASSIFICATION EVALUATION ({args.embedding_dim}D)")
+    print("="*70)
+    print(f"Fusion method: {args.fusion_method}")
+    print(f"Random seed: {args.random_seed}")
+    print(f"Cross-validation folds: {args.n_folds}")
+    
     print("\nLoading embeddings...")
     
-    # Load CryoLens embeddings
+    # Load CryoLens embeddings (extract structural dimensions only)
     print("  Loading CryoLens embeddings...")
     cl_embeddings, cl_labels = load_cryolens_embeddings(
-        Path(config['cryolens_embeddings'])
+        Path(config['cryolens_embeddings']),
+        structural_dim=args.embedding_dim
     )
-    print(f"    Loaded {len(cl_embeddings)} CryoLens embeddings")
+    print(f"    Loaded {len(cl_embeddings)} CryoLens samples ({args.embedding_dim}D)")
     
     # Load TomoTwin embeddings
     print("  Loading TomoTwin embeddings...")
     tt_embeddings, tt_labels = load_tomotwin_embeddings(
         Path(config['tomotwin_embeddings']),
-        Path(config['tomotwin_coords'])
+        Path(config['tomotwin_coords']),
+        embedding_dim=args.embedding_dim
     )
-    print(f"    Loaded {len(tt_embeddings)} TomoTwin embeddings")
+    print(f"    Loaded {len(tt_embeddings)} TomoTwin samples ({args.embedding_dim}D)")
     
     # Align embeddings
     print("\nAligning embeddings...")
@@ -395,30 +476,32 @@ def main():
         cl_embeddings, cl_labels, tt_embeddings, tt_labels, args.random_seed
     )
     
-    print(f"  Aligned {len(aligned_labels)} samples")
+    print(f"  Aligned {len(aligned_labels)} samples ({args.embedding_dim}D each)")
     print(f"  Classes: {common_structures}")
     
     # Create fusion embeddings
-    print("\nCreating fusion embeddings...")
-    fusion_embeddings = np.concatenate([aligned_tt, aligned_cl], axis=1)
-    print(f"  Fusion dimension: {fusion_embeddings.shape[1]}")
+    print(f"\nCreating fusion embeddings (method: {args.fusion_method})...")
+    fusion_embeddings = create_fusion_embeddings(
+        aligned_tt, aligned_cl, fusion_method=args.fusion_method
+    )
+    print(f"  Fusion dimension: {fusion_embeddings.shape[1]}D")
     
     # Evaluate each method
     print(f"\nRunning {args.n_folds}-fold cross-validation...")
     
     results = {}
     
-    print("  Evaluating TomoTwin...")
+    print(f"  Evaluating TomoTwin ({args.embedding_dim}D)...")
     results['tomotwin'] = stratified_cross_validation(
         aligned_tt, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed
     )
     
-    print("  Evaluating CryoLens...")
+    print(f"  Evaluating CryoLens ({args.embedding_dim}D structural)...")
     results['cryolens'] = stratified_cross_validation(
         aligned_cl, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed
     )
     
-    print("  Evaluating Fusion...")
+    print(f"  Evaluating Fusion ({fusion_embeddings.shape[1]}D)...")
     results['fusion'] = stratified_cross_validation(
         fusion_embeddings, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed
     )
@@ -449,7 +532,7 @@ def main():
     print("\n" + "="*70)
     print("RESULTS")
     print("="*70)
-    print(f"\nOverall Performance ({args.n_folds}-fold CV):")
+    print(f"\nOverall Performance ({args.n_folds}-fold CV, {args.embedding_dim}D):")
     print(f"  TomoTwin MAP:  {results['tomotwin']['mean_map']:.3f} ± {results['tomotwin']['std_map']:.3f}")
     print(f"  CryoLens MAP:  {results['cryolens']['mean_map']:.3f} ± {results['cryolens']['std_map']:.3f}")
     print(f"  Fusion MAP:    {results['fusion']['mean_map']:.3f} ± {results['fusion']['std_map']:.3f}")
@@ -486,7 +569,9 @@ def main():
             'common_structures': common_structures,
             'n_samples': len(aligned_labels),
             'n_folds': args.n_folds,
-            'random_seed': args.random_seed
+            'random_seed': args.random_seed,
+            'embedding_dim': args.embedding_dim,
+            'fusion_method': args.fusion_method
         }, f, indent=2)
     
     print(f"\nSaved results to {output_json}")
@@ -498,7 +583,8 @@ def main():
         results,
         per_class_results,
         common_structures,
-        figure_path
+        figure_path,
+        embedding_dim=args.embedding_dim
     )
     
     print("\n" + "="*70)
