@@ -444,31 +444,29 @@ def evaluate_ood_structure(
     
     print(f"  All {len(all_reconstructions)} reconstructions aligned to common reference")
     
-    # STAGE 2: Align to ground truth for evaluation
-    print("\nSTAGE 2: Aligning to ground truth for evaluation...")
+    # STAGE 2: Average first, then align to ground truth for evaluation
+    print("\nSTAGE 2: Averaging reconstructions, then aligning to ground truth for evaluation...")
     
-    # Align all individual reconstructions to GT
-    gt_aligned_reconstructions = []
-    for recon in tqdm(all_reconstructions, desc="Aligning to GT"):
-        gt_aligned, _ = align_volume(gt_normalized, recon, n_angles=24, refine=True)
-        gt_aligned_reconstructions.append(gt_aligned)
-    
-    # Compute metrics vs particle count using GT-aligned reconstructions
+    # Compute metrics vs particle count
     print("Computing metrics vs particle count...")
     metrics = {}
     
     for n in particle_counts:
-        if n > len(gt_aligned_reconstructions):
+        if n > len(all_reconstructions):
             continue
         
-        # Average first n GT-aligned reconstructions
-        avg = np.mean(gt_aligned_reconstructions[:n], axis=0)
+        # CRITICAL: Average FIRST in the common reference frame (no GT alignment yet)
+        # This ensures we only align the final average to GT, not individual particles
+        avg_in_ref_frame = np.mean(all_reconstructions[:n], axis=0)
+        
+        # NOW align the averaged reconstruction to GT for evaluation only
+        avg_aligned_to_gt, corr = align_volume(gt_normalized, avg_in_ref_frame, n_angles=24, refine=True)
         
         # Compute FSC with masking
         # CRITICAL: Apply masking during FSC computation to prevent edge artifacts
         # mask_radius=20.0 matches the working implementation for consistency
         _, _, resolution = compute_fsc_with_threshold(
-            gt_normalized, avg,
+            gt_normalized, avg_aligned_to_gt,
             voxel_size=voxel_size,
             threshold=0.5,
             mask_radius=20.0,  # CRITICAL: Apply mask during FSC
@@ -478,13 +476,13 @@ def evaluate_ood_structure(
         # Compute correlation
         correlation = np.corrcoef(
             gt_normalized.flatten(),
-            avg.flatten()
+            avg_aligned_to_gt.flatten()
         )[0, 1]
         
         metrics[n] = {
             'resolution': float(resolution),
             'correlation': float(correlation),
-            'average': avg
+            'average': avg_aligned_to_gt  # Save the GT-aligned average for visualization
         }
         
         print(f"  n={n:2d}: resolution={resolution:.1f}Å, correlation={correlation:.3f}")
