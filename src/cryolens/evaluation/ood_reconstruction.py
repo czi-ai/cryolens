@@ -10,6 +10,8 @@ This module provides a simple pipeline to:
 
 The implementation focuses on simplicity and reproducibility rather than
 extensive abstraction or features.
+
+Note: This implementation assumes a segmented Gaussian splat decoder.
 """
 
 import numpy as np
@@ -28,7 +30,7 @@ from matplotlib.gridspec import GridSpec
 from cryolens.data import CopickDataLoader
 from cryolens.inference.pipeline import InferencePipeline
 from cryolens.evaluation.fsc import compute_fsc_with_threshold, apply_soft_mask
-from cryolens.utils.normalization import normalize_volume
+from cryolens.utils.normalization import normalize_volume, denormalize_volume
 
 
 def load_mrc_structure(mrc_path: Path, box_size: int = 48) -> np.ndarray:
@@ -60,6 +62,15 @@ def load_mrc_structure(mrc_path: Path, box_size: int = 48) -> np.ndarray:
         data = zoom(data, zoom_factors, order=3)
     
     return data.astype(np.float32)
+
+
+def normalize_volume_zscore(volume: np.ndarray) -> np.ndarray:
+    """Z-score normalization"""
+    mean_val = np.mean(volume)
+    std_val = np.std(volume)
+    if std_val > 0:
+        return (volume - mean_val) / std_val
+    return volume - mean_val
 
 
 def compute_3d_cross_correlation(vol1: np.ndarray, vol2: np.ndarray) -> np.ndarray:
@@ -225,7 +236,6 @@ def generate_resampled_reconstructions(
     device: torch.device,
     n_samples: int = 10,
     noise_level: float = 0.05,
-    use_final_convolution: bool = True,
     target_shape: Tuple[int, int, int] = (48, 48, 48)
 ) -> List[np.ndarray]:
     """
@@ -234,12 +244,14 @@ def generate_resampled_reconstructions(
     Adds small Gaussian noise to input and resamples from latent space
     to estimate reconstruction uncertainty.
     
+    Note: Assumes segmented Gaussian splat decoder.
+    
     Parameters
     ----------
     particle : np.ndarray
         Input particle (48^3)
     model : torch.nn.Module
-        Trained CryoLens model
+        Trained CryoLens model with segmented decoder
     pipeline : InferencePipeline
         Inference pipeline
     device : torch.device
@@ -248,8 +260,6 @@ def generate_resampled_reconstructions(
         Number of resampled reconstructions
     noise_level : float
         Noise standard deviation (as fraction of particle std)
-    use_final_convolution : bool
-        Whether to apply final CTF-like convolution
     target_shape : Tuple[int, int, int]
         Output shape
         
@@ -260,7 +270,6 @@ def generate_resampled_reconstructions(
     """
     reconstructions = []
     decoder = model.decoder
-    is_segmented = hasattr(decoder, 'affinity_segment_size')
     
     for i in range(n_samples):
         # Add noise to input (except first sample)
@@ -270,50 +279,38 @@ def generate_resampled_reconstructions(
             noisy_particle = particle
         
         # Process through pipeline
-        if is_segmented:
-            # Segmented decoder - extract embeddings and reconstruct
-            results = pipeline.process_volume(
-                noisy_particle,
-                return_embeddings=True,
-                return_reconstruction=False
-            )
-            
-            mu = results['embeddings']
-            
-            # Add latent noise for resampling (except first)
-            if i > 0 and results.get('log_var') is not None:
-                std = np.exp(0.5 * results['log_var'])
-                eps = np.random.randn(*std.shape)
-                mu = mu + eps * std * 0.5
-            
-            # Convert to tensors
-            mu_tensor = torch.tensor(mu, dtype=torch.float32).unsqueeze(0).to(device)
-            pose = torch.tensor(
-                results['pose'] if results['pose'] is not None else np.array([1.0, 0.0, 0.0, 0.0]),
-                dtype=torch.float32
-            ).unsqueeze(0).to(device)
-            global_weight = torch.tensor(
-                results['global_weight'] if results['global_weight'] is not None else np.array([1.0]),
-                dtype=torch.float32
-            ).unsqueeze(0).to(device)
-            
-            # Decode
-            with torch.no_grad():
-                reconstruction = decoder(mu_tensor, pose, global_weight, use_final_convolution=use_final_convolution)
-            
-            reconstruction_np = reconstruction.cpu().numpy()[0, 0]
-            reconstruction_np = center_crop_volume(reconstruction_np, target_shape)
-            
-            # Denormalize
-            from cryolens.utils.normalization import denormalize_volume
-            reconstruction_np = denormalize_volume(reconstruction_np, results['normalization_stats'])
-        else:
-            # Standard decoder
-            results = pipeline.process_volume(
-                noisy_particle,
-                return_reconstruction=True
-            )
-            reconstruction_np = results['reconstruction']
+        results = pipeline.process_volume(
+            noisy_particle,
+            return_embeddings=True,
+            return_reconstruction=False
+        )
+        
+        mu = results['embeddings']
+        
+        # Add latent noise for resampling (except first)
+        if i > 0 and results.get('log_var') is not None:
+            std = np.exp(0.5 * results['log_var'])
+            eps = np.random.randn(*std.shape)
+            mu = mu + eps * std * 0.5
+        
+        # Convert to tensors
+        mu_tensor = torch.tensor(mu, dtype=torch.float32).unsqueeze(0).to(device)
+        pose = torch.tensor(
+            results['pose'] if results['pose'] is not None else np.array([1.0, 0.0, 0.0, 0.0]),
+            dtype=torch.float32
+        ).unsqueeze(0).to(device)
+        global_weight = torch.tensor(
+            results['global_weight'] if results['global_weight'] is not None else np.array([1.0]),
+            dtype=torch.float32
+        ).unsqueeze(0).to(device)
+        
+        # Decode with splats only (use_final_convolution=True for CTF-like layer)
+        with torch.no_grad():
+            reconstruction = decoder(mu_tensor, pose, global_weight, use_final_convolution=True)
+        
+        reconstruction_np = reconstruction.cpu().numpy()[0, 0]
+        reconstruction_np = center_crop_volume(reconstruction_np, target_shape)
+        reconstruction_np = denormalize_volume(reconstruction_np, results['normalization_stats'])
         
         reconstructions.append(reconstruction_np)
     
@@ -336,19 +333,16 @@ def evaluate_ood_structure(
     """
     Evaluate single structure OOD reconstruction performance.
     
-    This is the main evaluation function that:
-    1. Loads particles and ground truth
-    2. Generates reconstructions with uncertainty
-    3. Aligns to common reference
-    4. Computes metrics vs particle count
-    5. Saves results and creates figures
+    This follows a two-stage alignment process:
+    1. Align all reconstructions to first particle (common reference frame)
+    2. Align averaged and individual reconstructions to GT for evaluation
     
     Parameters
     ----------
     structure_name : str
         Name of structure to evaluate
     model : torch.nn.Module
-        Trained model
+        Trained model with segmented decoder
     pipeline : InferencePipeline
         Inference pipeline
     copick_loader : CopickDataLoader
@@ -384,6 +378,7 @@ def evaluate_ood_structure(
     print("Loading ground truth...")
     ground_truth = load_mrc_structure(ground_truth_path)
     ground_truth = apply_soft_mask(ground_truth, radius=22, soft_edge=5)
+    gt_normalized = normalize_volume_zscore(ground_truth)
     
     # 2. Load particles from Copick
     print(f"Loading particles from Copick...")
@@ -406,56 +401,65 @@ def evaluate_ood_structure(
     # Apply masking to particles
     particles = [apply_soft_mask(p, radius=22, soft_edge=5) for p in particles]
     
-    # 3. Generate reconstructions with uncertainty
-    print("Generating reconstructions...")
+    # STAGE 1: Generate reconstructions and align to first particle
+    print("\nSTAGE 1: Generating reconstructions and aligning to common reference...")
     all_reconstructions = []
+    reference_reconstruction = None
     
-    for particle in tqdm(particles, desc="Processing particles"):
+    for idx, particle in enumerate(tqdm(particles, desc="Processing particles")):
         # Generate n_resamples reconstructions with noise
         recons = generate_resampled_reconstructions(
             particle, model, pipeline, device,
             n_samples=n_resamples,
             noise_level=0.05,
-            use_final_convolution=True,
             target_shape=(48, 48, 48)
         )
         
-        # Average resamples for this particle
-        mean_recon = np.mean(recons, axis=0)
+        # Normalize reconstructions
+        recons_norm = [normalize_volume_zscore(r) for r in recons]
+        
+        # Set reference from first particle's mean reconstruction
+        if idx == 0:
+            reference_reconstruction = np.mean(recons_norm, axis=0)
+            print(f"  Using first particle as alignment reference")
+            # First particle is already aligned to itself
+            aligned_recons = recons_norm
+        else:
+            # Align each resample to the reference
+            aligned_recons = []
+            for recon_norm in recons_norm:
+                aligned, _ = align_volume(reference_reconstruction, recon_norm, n_angles=24, refine=True)
+                aligned_recons.append(aligned)
+        
+        # Average the aligned resamples
+        mean_recon = np.mean(aligned_recons, axis=0)
         all_reconstructions.append(mean_recon)
     
-    # 4. Align all to first reconstruction (not GT)
-    print("Aligning reconstructions to common reference...")
-    reference = all_reconstructions[0]
-    aligned = []
+    print(f"  All {len(all_reconstructions)} reconstructions aligned to common reference")
     
-    for recon in tqdm(all_reconstructions, desc="Aligning"):
-        aligned_recon, corr = align_volume(reference, recon, n_angles=24, refine=True)
-        aligned.append(aligned_recon)
+    # STAGE 2: Align to ground truth for evaluation
+    print("\nSTAGE 2: Aligning to ground truth for evaluation...")
     
-    # 5. Compute metrics vs particle count
+    # Align all individual reconstructions to GT
+    gt_aligned_reconstructions = []
+    for recon in tqdm(all_reconstructions, desc="Aligning to GT"):
+        gt_aligned, _ = align_volume(gt_normalized, recon, n_angles=24, refine=True)
+        gt_aligned_reconstructions.append(gt_aligned)
+    
+    # Compute metrics vs particle count using GT-aligned reconstructions
     print("Computing metrics vs particle count...")
-    
-    # Normalize ground truth for comparison
-    gt_normalized = (ground_truth - ground_truth.mean()) / ground_truth.std()
-    
     metrics = {}
+    
     for n in particle_counts:
-        if n > len(aligned):
+        if n > len(gt_aligned_reconstructions):
             continue
         
-        # Average first n reconstructions
-        avg = np.mean(aligned[:n], axis=0)
-        
-        # Normalize average
-        avg_normalized = (avg - avg.mean()) / avg.std()
-        
-        # Align average to GT for evaluation
-        avg_aligned, _ = align_volume(gt_normalized, avg_normalized, n_angles=24, refine=True)
+        # Average first n GT-aligned reconstructions
+        avg = np.mean(gt_aligned_reconstructions[:n], axis=0)
         
         # Compute FSC
         _, _, resolution = compute_fsc_with_threshold(
-            gt_normalized, avg_aligned,
+            gt_normalized, avg,
             voxel_size=voxel_size,
             threshold=0.5,
             mask_radius=20.0,
@@ -465,18 +469,18 @@ def evaluate_ood_structure(
         # Compute correlation
         correlation = np.corrcoef(
             gt_normalized.flatten(),
-            avg_aligned.flatten()
+            avg.flatten()
         )[0, 1]
         
         metrics[n] = {
             'resolution': float(resolution),
             'correlation': float(correlation),
-            'average': avg_aligned
+            'average': avg
         }
         
         print(f"  n={n:2d}: resolution={resolution:.1f}Å, correlation={correlation:.3f}")
     
-    # 6. Save results to HDF5
+    # Save results
     print("Saving results...")
     h5_path = output_dir / f"{structure_name}_results.h5"
     
@@ -494,7 +498,7 @@ def evaluate_ood_structure(
     
     print(f"  Saved to {h5_path}")
     
-    # 7. Create figure
+    # Create figure
     print("Creating figure...")
     fig_path = output_dir / f"{structure_name}_results.png"
     create_ood_figure(structure_name, ground_truth, metrics, voxel_size, fig_path)
