@@ -30,7 +30,7 @@ from matplotlib.gridspec import GridSpec
 
 from cryolens.evaluation.classification import (
     stratified_cross_validation,
-    compute_per_class_metrics,
+    compute_per_class_metrics_from_predictions,
     compute_statistical_significance
 )
 
@@ -493,17 +493,20 @@ def main():
     
     print(f"  Evaluating TomoTwin ({args.embedding_dim}D)...")
     results['tomotwin'] = stratified_cross_validation(
-        aligned_tt, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed
+        aligned_tt, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed,
+        return_predictions=True
     )
     
     print(f"  Evaluating CryoLens ({args.embedding_dim}D structural)...")
     results['cryolens'] = stratified_cross_validation(
-        aligned_cl, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed
+        aligned_cl, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed,
+        return_predictions=True
     )
     
     print(f"  Evaluating Fusion ({fusion_embeddings.shape[1]}D)...")
     results['fusion'] = stratified_cross_validation(
-        fusion_embeddings, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed
+        fusion_embeddings, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed,
+        return_predictions=True
     )
     
     # Statistical significance
@@ -513,18 +516,18 @@ def main():
         results['fusion']['map_per_fold']
     )
     
-    # Per-class metrics
-    print("\nComputing per-class metrics...")
+    # Per-class metrics (fast - reuses predictions from CV)
+    print("\nComputing per-class metrics (from saved predictions)...")
     
     per_class_results = {
-        'tomotwin': compute_per_class_metrics(
-            aligned_tt, aligned_labels, common_structures, args.n_folds, args.random_seed
+        'tomotwin': compute_per_class_metrics_from_predictions(
+            results['tomotwin']['predictions'], common_structures
         ),
-        'cryolens': compute_per_class_metrics(
-            aligned_cl, aligned_labels, common_structures, args.n_folds, args.random_seed
+        'cryolens': compute_per_class_metrics_from_predictions(
+            results['cryolens']['predictions'], common_structures
         ),
-        'fusion': compute_per_class_metrics(
-            fusion_embeddings, aligned_labels, common_structures, args.n_folds, args.random_seed
+        'fusion': compute_per_class_metrics_from_predictions(
+            results['fusion']['predictions'], common_structures
         )
     }
     

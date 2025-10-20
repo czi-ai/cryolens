@@ -23,8 +23,9 @@ def stratified_cross_validation(
     embeddings: np.ndarray,
     labels: np.ndarray,
     n_folds: int = 10,
-    random_seed: int = 171717
-) -> Dict[str, np.ndarray]:
+    random_seed: int = 171717,
+    return_predictions: bool = False
+) -> Dict:
     """
     Perform stratified k-fold cross-validation.
     
@@ -33,6 +34,7 @@ def stratified_cross_validation(
         labels: Class labels (n_samples,) - can be strings or integers
         n_folds: Number of folds
         random_seed: Random seed for reproducibility
+        return_predictions: If True, return predictions for per-class analysis
         
     Returns:
         Dictionary containing:
@@ -42,6 +44,7 @@ def stratified_cross_validation(
             - 'std_map': Standard deviation of MAP
             - 'mean_accuracy': Mean accuracy
             - 'std_accuracy': Standard deviation of accuracy
+            - 'predictions' (optional): List of (y_true, y_pred, y_scores) per fold
             
     Examples:
         >>> embeddings = np.random.randn(100, 40)
@@ -53,13 +56,17 @@ def stratified_cross_validation(
     if isinstance(labels[0], str):
         le = LabelEncoder()
         labels_encoded = le.fit_transform(labels)
+        original_labels = labels
     else:
         labels_encoded = labels
+        le = None
+        original_labels = None
     
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_seed)
     
     map_scores = []
     accuracy_scores = []
+    predictions = [] if return_predictions else None
     
     for train_idx, test_idx in skf.split(embeddings, labels_encoded):
         # Split data
@@ -80,6 +87,16 @@ def stratified_cross_validation(
         # Predict
         y_pred = clf.predict(X_test_scaled)
         y_scores = clf.predict_proba(X_test_scaled)
+        
+        # Store predictions if requested
+        if return_predictions:
+            # Store original string labels if available
+            if le is not None:
+                y_test_labels = [original_labels[i] for i in test_idx]
+                y_pred_labels = le.inverse_transform(y_pred)
+                predictions.append((y_test_labels, y_pred_labels, y_scores, clf.classes_))
+            else:
+                predictions.append((y_test, y_pred, y_scores, clf.classes_))
         
         # Compute metrics
         accuracy = accuracy_score(y_test, y_pred)
@@ -107,7 +124,7 @@ def stratified_cross_validation(
         
         accuracy_scores.append(accuracy)
     
-    return {
+    result = {
         'map_per_fold': np.array(map_scores),
         'accuracy_per_fold': np.array(accuracy_scores),
         'mean_map': float(np.mean(map_scores)),
@@ -115,51 +132,32 @@ def stratified_cross_validation(
         'mean_accuracy': float(np.mean(accuracy_scores)),
         'std_accuracy': float(np.std(accuracy_scores))
     }
+    
+    if return_predictions:
+        result['predictions'] = predictions
+        result['label_encoder'] = le
+    
+    return result
 
 
-def compute_per_class_metrics(
-    embeddings: np.ndarray,
-    labels: List[str],
-    class_names: Optional[List[str]] = None,
-    n_folds: int = 10,
-    random_seed: int = 171717
+def compute_per_class_metrics_from_predictions(
+    predictions: List[Tuple],
+    class_names: List[str]
 ) -> Dict[str, Dict]:
     """
-    Compute per-class metrics with cross-validation.
+    Compute per-class metrics from saved CV predictions (fast - no retraining).
+    
+    This function reuses predictions from stratified_cross_validation() to compute
+    per-class metrics without redundant training.
     
     Args:
-        embeddings: Feature vectors
-        labels: Class labels (strings)
-        class_names: List of class names to evaluate (if None, uses all unique labels)
-        n_folds: Number of CV folds
-        random_seed: Random seed
+        predictions: List of (y_true, y_pred, y_scores, classes) tuples from each fold
+        class_names: List of class names to evaluate
         
     Returns:
         Dictionary mapping class names to their metrics
-        
-    Examples:
-        >>> embeddings = np.random.randn(100, 40)
-        >>> labels = ['class_a'] * 30 + ['class_b'] * 35 + ['class_c'] * 35
-        >>> results = compute_per_class_metrics(embeddings, labels)
-        >>> print(results['class_a']['mean_map'])
     """
-    if class_names is None:
-        class_names = sorted(set(labels))
-    
-    # Encode labels
-    le = LabelEncoder()
-    le.fit(class_names)
-    labels_encoded = np.array([le.transform([l])[0] if l in class_names else -1 for l in labels])
-    
-    # Filter out labels not in class_names
-    valid_mask = labels_encoded >= 0
-    embeddings = embeddings[valid_mask]
-    labels_encoded = labels_encoded[valid_mask]
-    labels_filtered = [labels[i] for i in range(len(labels)) if valid_mask[i]]
-    
     per_class_results = {}
-    
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_seed)
     
     # Initialize storage for each class
     for class_name in class_names:
@@ -169,37 +167,28 @@ def compute_per_class_metrics(
             'recall_per_fold': []
         }
     
-    for train_idx, test_idx in skf.split(embeddings, labels_encoded):
-        X_train = embeddings[train_idx]
-        X_test = embeddings[test_idx]
-        y_train = labels_encoded[train_idx]
-        y_test = labels_encoded[test_idx]
+    # Process each fold's predictions
+    for y_true, y_pred, y_scores, clf_classes in predictions:
+        # Convert to numpy arrays
+        y_true = np.array(y_true)
+        y_pred = np.array(y_pred)
         
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        
-        clf = LogisticRegression(max_iter=1000, random_state=random_seed)
-        clf.fit(X_train_scaled, y_train)
-        
-        y_scores = clf.predict_proba(X_test_scaled)
-        y_pred = clf.predict(X_test_scaled)
-        
-        # Per-class metrics
-        for i, class_name in enumerate(class_names):
-            class_encoded = le.transform([class_name])[0]
-            y_true_binary = (y_test == class_encoded).astype(int)
-            y_pred_binary = (y_pred == class_encoded).astype(int)
+        # For each class, compute metrics
+        for class_name in class_names:
+            # Binary indicators for this class
+            y_true_binary = (y_true == class_name).astype(int)
+            y_pred_binary = (y_pred == class_name).astype(int)
             
-            # Find column index for this class
-            class_idx = np.where(clf.classes_ == class_encoded)[0]
-            if len(class_idx) == 0:
+            # Find column index for this class in probability scores
+            if class_name in clf_classes:
+                class_idx = np.where(clf_classes == class_name)[0][0]
+                y_score_binary = y_scores[:, class_idx]
+            else:
+                # Class not present in this fold
                 continue
             
-            y_score_binary = y_scores[:, class_idx[0]]
-            
-            # MAP
-            if np.sum(y_true_binary) > 0:  # Only if class exists in test set
+            # MAP (only if class exists in test set)
+            if np.sum(y_true_binary) > 0:
                 map_score = average_precision_score(y_true_binary, y_score_binary)
                 per_class_results[class_name]['map_per_fold'].append(map_score)
             
@@ -226,6 +215,56 @@ def compute_per_class_metrics(
                 per_class_results[class_name][f'std_{metric}'] = 0.0
     
     return per_class_results
+
+
+def compute_per_class_metrics(
+    embeddings: np.ndarray,
+    labels: List[str],
+    class_names: Optional[List[str]] = None,
+    n_folds: int = 10,
+    random_seed: int = 171717
+) -> Dict[str, Dict]:
+    """
+    Compute per-class metrics with cross-validation.
+    
+    This is a convenience wrapper that runs CV and computes per-class metrics.
+    For better performance when calling multiple times, use:
+    1. stratified_cross_validation(..., return_predictions=True) once
+    2. compute_per_class_metrics_from_predictions() multiple times
+    
+    Args:
+        embeddings: Feature vectors
+        labels: Class labels (strings)
+        class_names: List of class names to evaluate (if None, uses all unique labels)
+        n_folds: Number of CV folds
+        random_seed: Random seed
+        
+    Returns:
+        Dictionary mapping class names to their metrics
+        
+    Examples:
+        >>> embeddings = np.random.randn(100, 40)
+        >>> labels = ['class_a'] * 30 + ['class_b'] * 35 + ['class_c'] * 35
+        >>> results = compute_per_class_metrics(embeddings, labels)
+        >>> print(results['class_a']['mean_map'])
+    """
+    if class_names is None:
+        class_names = sorted(set(labels))
+    
+    # Run CV with prediction tracking
+    cv_results = stratified_cross_validation(
+        embeddings, 
+        labels, 
+        n_folds=n_folds, 
+        random_seed=random_seed,
+        return_predictions=True
+    )
+    
+    # Compute per-class metrics from saved predictions
+    return compute_per_class_metrics_from_predictions(
+        cv_results['predictions'],
+        class_names
+    )
 
 
 def compute_statistical_significance(
