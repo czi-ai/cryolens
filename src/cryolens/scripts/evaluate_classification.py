@@ -459,6 +459,8 @@ def main():
                        help='Fusion method (default: average)')
     parser.add_argument('--attention-epochs', type=int, default=20,
                        help='Number of epochs for attention fusion training (default: 20)')
+    parser.add_argument('--balance-classes', action='store_true',
+                       help='Undersample majority classes for balanced evaluation')
     
     args = parser.parse_args()
     
@@ -503,6 +505,56 @@ def main():
     
     print(f"  Aligned {len(aligned_labels)} samples ({args.embedding_dim}D each)")
     print(f"  Classes: {common_structures}")
+    
+    # Report class distribution
+    print(f"\n  Class distribution:")
+    class_counts = {}
+    for class_name in common_structures:
+        count = sum(1 for label in aligned_labels if label == class_name)
+        class_counts[class_name] = count
+        print(f"    {class_name:20s}: {count:4d} samples ({count/len(aligned_labels)*100:5.1f}%)")
+    
+    # Check for severe imbalance
+    min_count = min(class_counts.values())
+    max_count = max(class_counts.values())
+    imbalance_ratio = max_count / min_count if min_count > 0 else float('inf')
+    
+    if imbalance_ratio > 3:
+        print(f"\n  ⚠ WARNING: Class imbalance detected! (ratio: {imbalance_ratio:.1f}x)")
+        print(f"    Most common: {max_count} samples")
+        print(f"    Least common: {min_count} samples")
+        print(f"    This may inflate MAP for majority classes.")
+    
+    # Balance classes if requested
+    if args.balance_classes:
+        print(f"\n  Balancing classes by undersampling to {min_count} samples each...")
+        
+        balanced_tt = []
+        balanced_cl = []
+        balanced_labels = []
+        
+        np.random.seed(args.random_seed)
+        
+        for class_name in common_structures:
+            # Get indices for this class
+            class_indices = [i for i, label in enumerate(aligned_labels) if label == class_name]
+            
+            # Undersample to min_count
+            if len(class_indices) > min_count:
+                selected_indices = np.random.choice(class_indices, min_count, replace=False)
+            else:
+                selected_indices = class_indices
+            
+            balanced_tt.extend(aligned_tt[selected_indices])
+            balanced_cl.extend(aligned_cl[selected_indices])
+            balanced_labels.extend([class_name] * len(selected_indices))
+        
+        # Convert to arrays
+        aligned_tt = np.array(balanced_tt, dtype=np.float32)
+        aligned_cl = np.array(balanced_cl, dtype=np.float32)
+        aligned_labels = balanced_labels
+        
+        print(f"  Balanced to {len(aligned_labels)} total samples ({min_count} per class)")
     
     # Evaluate each method
     print(f"\nRunning {args.n_folds}-fold cross-validation...")
