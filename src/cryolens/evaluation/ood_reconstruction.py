@@ -398,7 +398,10 @@ def evaluate_ood_structure(
     particles = data[structure_name]['particles'][:n_particles]
     print(f"Loaded {len(particles)} particles")
     
-    # Apply masking to particles
+    # CRITICAL: Apply masking to particles before processing
+    # This ensures consistent signal processing and prevents artifacts
+    # in both reconstruction and FSC computation
+    print("Applying soft masks to particles...")
     particles = [apply_soft_mask(p, radius=22, soft_edge=5) for p in particles]
     
     # STAGE 1: Generate reconstructions and align to first particle
@@ -457,12 +460,14 @@ def evaluate_ood_structure(
         # Average first n GT-aligned reconstructions
         avg = np.mean(gt_aligned_reconstructions[:n], axis=0)
         
-        # Compute FSC
+        # Compute FSC with masking
+        # CRITICAL: Apply masking during FSC computation to prevent edge artifacts
+        # mask_radius=20.0 matches the working implementation for consistency
         _, _, resolution = compute_fsc_with_threshold(
             gt_normalized, avg,
             voxel_size=voxel_size,
             threshold=0.5,
-            mask_radius=20.0,
+            mask_radius=20.0,  # CRITICAL: Apply mask during FSC
             soft_edge=5.0
         )
         
