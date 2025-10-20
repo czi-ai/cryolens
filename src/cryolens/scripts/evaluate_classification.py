@@ -51,7 +51,25 @@ def normalize_protein_name(name: str) -> str:
     """Normalize protein names to consistent format."""
     if pd.isna(name):
         return 'unknown'
-    return str(name).lower().replace('-', '_').replace(' ', '_')
+    
+    # Standardize to lowercase with underscores
+    normalized = str(name).lower().replace('-', '_').replace(' ', '_')
+    
+    # Fix common naming inconsistencies
+    name_corrections = {
+        'beta_galactoside': 'beta_galactosidase',
+        'betagalactoside': 'beta_galactosidase',
+        'beta_amylase': 'beta_amylase',  # Keep as-is
+        'betaamylase': 'beta_amylase',
+        'apo_ferritin': 'apoferritin',
+        'apoferritin': 'apoferritin',
+        'virus_like_particle': 'virus_like_particle',  # Keep as-is
+        'vlp': 'virus_like_particle',
+        'ribosome': 'ribosome',  # Keep as-is
+        'thyroglobulin': 'thyroglobulin',  # Keep as-is
+    }
+    
+    return name_corrections.get(normalized, normalized)
 
 
 def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str]]:
@@ -290,6 +308,22 @@ def create_fusion_embeddings(
         raise ValueError(f"Unknown fusion method: {fusion_method}")
 
 
+def format_class_name(name: str) -> str:
+    """Format class names for display in figures."""
+    # Map to display names
+    display_names = {
+        'beta_galactosidase': 'β-Galactosidase',
+        'beta_amylase': 'β-Amylase',
+        'apoferritin': 'Apoferritin',
+        'apo_ferritin': 'Apoferritin',
+        'virus_like_particle': 'Virus-Like Particle',
+        'ribosome': 'Ribosome',
+        'thyroglobulin': 'Thyroglobulin',
+    }
+    
+    return display_names.get(name, name.replace('_', ' ').title())
+
+
 def create_classification_figure(
     results: Dict,
     per_class_results: Dict,
@@ -376,7 +410,7 @@ def create_classification_figure(
     bars = ax2.barh(y_pos, maps_sorted, xerr=stds_sorted, alpha=0.7, capsize=3, color='#2ca02c')
     
     ax2.set_yticks(y_pos)
-    ax2.set_yticklabels([c.replace('_', ' ').title() for c in classes_sorted], fontsize=9)
+    ax2.set_yticklabels([format_class_name(c) for c in classes_sorted], fontsize=9)
     ax2.set_xlabel('MAP', fontsize=11, fontweight='bold')
     ax2.set_title('Per-Class Performance\n(Fusion)', fontsize=12, fontweight='bold')
     ax2.grid(True, alpha=0.3, axis='x')
@@ -409,7 +443,7 @@ def create_classification_figure(
     ax3.set_ylabel('Mean Average Precision', fontsize=12, fontweight='bold')
     ax3.set_title('Per-Class Comparison: TomoTwin vs Fusion', fontsize=14, fontweight='bold')
     ax3.set_xticks(x)
-    ax3.set_xticklabels([c.replace('_', ' ').title() for c in classes], 
+    ax3.set_xticklabels([format_class_name(c) for c in classes], 
                         rotation=45, ha='right', fontsize=10)
     ax3.legend(fontsize=11)
     ax3.grid(True, alpha=0.3, axis='y')
