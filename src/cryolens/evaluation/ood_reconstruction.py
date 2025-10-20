@@ -312,6 +312,10 @@ def generate_resampled_reconstructions(
         reconstruction_np = center_crop_volume(reconstruction_np, target_shape)
         reconstruction_np = denormalize_volume(reconstruction_np, results['normalization_stats'])
         
+        # CRITICAL: Negate reconstruction to match expected contrast
+        # The Gaussian splat decoder produces inverted density when using final convolution
+        reconstruction_np = -reconstruction_np
+        
         reconstructions.append(reconstruction_np)
     
     return reconstructions
