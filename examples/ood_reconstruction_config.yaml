@@ -1,0 +1,44 @@
+# CryoLens OOD Reconstruction Evaluation Configuration
+#
+# This configuration file shows how to run OOD reconstruction evaluation
+# for reproducing paper figures.
+
+# Required: Path to trained model checkpoint
+checkpoint: "models/cryolens_epoch_2600.pt"
+
+# Required: Path to Copick configuration for ML Challenge experimental data
+copick_config: "ml_challenge_experimental_publictest.json"
+
+# Required: Directory containing ground truth MRC structures
+structures_dir: "structures/mrcs/"
+
+# Required: Output directory for results
+output_dir: "results/ood_reconstruction/"
+
+# Optional: Specify subset of structures to evaluate
+# If not specified, evaluates all structures
+# structures:
+#   - ribosome
+#   - thyroglobulin
+#   - beta-galactoside
+
+# Processing parameters
+n_particles: 25           # Number of particles per structure
+n_resamples: 10          # Number of resamples for uncertainty estimation
+voxel_size: 10.0         # Voxel size in Angstroms
+
+# Evaluation parameters
+particle_counts:         # Particle counts to test
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+
+# Expected ground truth files in structures_dir:
+# - 7vd8.mrc (apo-ferritin)
+# - 1fa2.mrc (beta-amylase)
+# - 6drv.mrc (beta-galactoside)
+# - 6qzp.mrc (ribosome)
+# - 7b75.mrc (thyroglobulin)
+# - 6n4v.mrc (virus-like-particle)
