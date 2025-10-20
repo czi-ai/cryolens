@@ -33,191 +33,12 @@ from cryolens.evaluation.classification import (
     compute_per_class_metrics_from_predictions,
     compute_statistical_significance
 )
+from cryolens.evaluation.attention_fusion_cv import (
+    stratified_cross_validation_with_attention
+)
+
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
-
-
-class SimpleAttentionFusion(nn.Module):
-    """Simple attention-based fusion with 32D output for fair comparison."""
-    def __init__(self, tt_dim: int = 32, cl_dim: int = 32, output_dim: int = 32):
-        super().__init__()
-        
-        # Learn attention weights for each embedding
-        self.tt_attention = nn.Sequential(
-            nn.Linear(tt_dim, 1),
-            nn.Sigmoid()
-        )
-        
-        self.cl_attention = nn.Sequential(
-            nn.Linear(cl_dim, 1),
-            nn.Sigmoid()
-        )
-        
-        # Fusion network: 64D (weighted concat) -> 32D output
-        self.fusion = nn.Sequential(
-            nn.Linear(tt_dim + cl_dim, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, output_dim)
-        )
-    
-    def forward(self, tt_emb, cl_emb):
-        # Get attention weights
-        att_tt = self.tt_attention(tt_emb)  # (batch, 1)
-        att_cl = self.cl_attention(cl_emb)  # (batch, 1)
-        
-        # Apply attention weights
-        tt_weighted = tt_emb * att_tt
-        cl_weighted = cl_emb * att_cl
-        
-        # Concatenate weighted embeddings
-        combined = torch.cat([tt_weighted, cl_weighted], dim=1)  # (batch, 64)
-        
-        # Fuse to 32D output
-        output = self.fusion(combined)  # (batch, 32)
-        
-        return output
-
-
-def train_attention_fusion(
-    tt_embeddings: np.ndarray,
-    cl_embeddings: np.ndarray,
-    labels: List[str],
-    n_epochs: int = 20,
-    random_seed: int = 171717,
-    device: str = 'cpu'
-) -> np.ndarray:
-    """
-    Train attention fusion model and return fused embeddings.
-    
-    Args:
-        tt_embeddings: TomoTwin embeddings (N, 32)
-        cl_embeddings: CryoLens embeddings (N, 32)
-        labels: Class labels
-        n_epochs: Number of training epochs
-        random_seed: Random seed
-        device: Device to use ('cpu', 'cuda', 'mps')
-        
-    Returns:
-        Fused 32D embeddings (N, 32)
-    """
-    from sklearn.preprocessing import LabelEncoder, StandardScaler
-    from sklearn.model_selection import train_test_split
-    
-    print(f"  Training attention fusion for {n_epochs} epochs on {device}...")
-    
-    # Encode labels
-    le = LabelEncoder()
-    y_encoded = le.fit_transform(labels)
-    n_classes = len(le.classes_)
-    
-    # Split data for training
-    train_idx, val_idx = train_test_split(
-        np.arange(len(labels)),
-        test_size=0.2,
-        random_state=random_seed,
-        stratify=y_encoded
-    )
-    
-    # Standardize (important for attention learning)
-    scaler_tt = StandardScaler()
-    scaler_cl = StandardScaler()
-    
-    tt_scaled = scaler_tt.fit_transform(tt_embeddings)
-    cl_scaled = scaler_cl.fit_transform(cl_embeddings)
-    
-    # Create datasets
-    train_data = TensorDataset(
-        torch.FloatTensor(tt_scaled[train_idx]),
-        torch.FloatTensor(cl_scaled[train_idx]),
-        torch.LongTensor(y_encoded[train_idx])
-    )
-    
-    val_data = TensorDataset(
-        torch.FloatTensor(tt_scaled[val_idx]),
-        torch.FloatTensor(cl_scaled[val_idx]),
-        torch.LongTensor(y_encoded[val_idx])
-    )
-    
-    train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
-    
-    # Create model
-    model = SimpleAttentionFusion(tt_dim=32, cl_dim=32, output_dim=32).to(device)
-    classifier_head = nn.Linear(32, n_classes).to(device)
-    
-    # Setup training
-    optimizer = optim.Adam(
-        list(model.parameters()) + list(classifier_head.parameters()),
-        lr=0.001
-    )
-    criterion = nn.CrossEntropyLoss()
-    
-    # Train
-    model.train()
-    classifier_head.train()
-    
-    for epoch in range(n_epochs):
-        epoch_loss = 0
-        for tt_batch, cl_batch, y_batch in train_loader:
-            tt_batch = tt_batch.to(device)
-            cl_batch = cl_batch.to(device)
-            y_batch = y_batch.to(device)
-            
-            optimizer.zero_grad()
-            fused = model(tt_batch, cl_batch)
-            logits = classifier_head(fused)
-            loss = criterion(logits, y_batch)
-            loss.backward()
-            optimizer.step()
-            
-            epoch_loss += loss.item()
-        
-        # Validation
-        if (epoch + 1) % 5 == 0:
-            model.eval()
-            classifier_head.eval()
-            
-            correct = 0
-            total = 0
-            
-            with torch.no_grad():
-                for tt_batch, cl_batch, y_batch in val_loader:
-                    tt_batch = tt_batch.to(device)
-                    cl_batch = cl_batch.to(device)
-                    y_batch = y_batch.to(device)
-                    
-                    fused = model(tt_batch, cl_batch)
-                    logits = classifier_head(fused)
-                    pred = logits.argmax(dim=1)
-                    correct += (pred == y_batch).sum().item()
-                    total += y_batch.size(0)
-            
-            val_acc = correct / total
-            print(f"    Epoch {epoch+1}/{n_epochs}: Loss={epoch_loss/len(train_loader):.4f}, Val Acc={val_acc:.4f}")
-            
-            model.train()
-            classifier_head.train()
-    
-    # Extract fused embeddings for all data
-    model.eval()
-    with torch.no_grad():
-        fused_embeddings = model(
-            torch.FloatTensor(tt_scaled).to(device),
-            torch.FloatTensor(cl_scaled).to(device)
-        ).cpu().numpy()
-    
-    print(f"  Attention fusion training complete. Output: {fused_embeddings.shape}")
-    
-    return fused_embeddings
 
 
 def load_config(config_path: Path) -> Dict:
@@ -683,35 +504,6 @@ def main():
     print(f"  Aligned {len(aligned_labels)} samples ({args.embedding_dim}D each)")
     print(f"  Classes: {common_structures}")
     
-    # Create fusion embeddings
-    print(f"\nCreating fusion embeddings (method: {args.fusion_method})...")
-    
-    if args.fusion_method == 'attention':
-        # Determine device
-        if torch.cuda.is_available():
-            device = 'cuda'
-        elif torch.backends.mps.is_available():
-            device = 'mps'
-        else:
-            device = 'cpu'
-        
-        # Train attention fusion and get fused embeddings
-        fusion_embeddings = train_attention_fusion(
-            aligned_tt,
-            aligned_cl,
-            aligned_labels,
-            n_epochs=args.attention_epochs,
-            random_seed=args.random_seed,
-            device=device
-        )
-    else:
-        # Use simple fusion methods
-        fusion_embeddings = create_fusion_embeddings(
-            aligned_tt, aligned_cl, fusion_method=args.fusion_method
-        )
-    
-    print(f"  Fusion dimension: {fusion_embeddings.shape[1]}D")
-    
     # Evaluate each method
     print(f"\nRunning {args.n_folds}-fold cross-validation...")
     
@@ -729,11 +521,40 @@ def main():
         return_predictions=True
     )
     
-    print(f"  Evaluating Fusion ({fusion_embeddings.shape[1]}D)...")
-    results['fusion'] = stratified_cross_validation(
-        fusion_embeddings, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed,
-        return_predictions=True
-    )
+    # Handle fusion method
+    if args.fusion_method == 'attention':
+        # Determine device
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
+        
+        print(f"  Evaluating Attention Fusion (32D, nested CV to prevent leakage)...")
+        print(f"    Training fusion inside each fold on {device}...")
+        results['fusion'] = stratified_cross_validation_with_attention(
+            aligned_tt,
+            aligned_cl,
+            aligned_labels,
+            n_folds=args.n_folds,
+            n_epochs=args.attention_epochs,
+            random_seed=args.random_seed,
+            device=device,
+            return_predictions=True
+        )
+    else:
+        # Simple fusion methods
+        print(f"  Evaluating Fusion ({args.fusion_method})...")
+        fusion_embeddings = create_fusion_embeddings(
+            aligned_tt, aligned_cl, fusion_method=args.fusion_method
+        )
+        print(f"    Fusion dimension: {fusion_embeddings.shape[1]}D")
+        
+        results['fusion'] = stratified_cross_validation(
+            fusion_embeddings, aligned_labels, n_folds=args.n_folds, random_seed=args.random_seed,
+            return_predictions=True
+        )
     
     # Statistical significance
     print("\nComputing statistical significance...")
