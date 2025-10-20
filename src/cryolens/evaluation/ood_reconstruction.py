@@ -497,6 +497,11 @@ def evaluate_ood_structure(
         f.attrs['n_particles'] = len(particles)
         f.attrs['voxel_size'] = voxel_size
         
+        # Save input particles for later analysis
+        particles_grp = f.create_group('particles')
+        for i, particle in enumerate(particles):
+            particles_grp.create_dataset(f'particle_{i:03d}', data=particle, compression='gzip')
+        
         for n, m in metrics.items():
             grp = f.create_group(f'n_{n:03d}')
             grp.attrs['resolution'] = m['resolution']
