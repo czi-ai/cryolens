@@ -8,6 +8,7 @@ CryoLens is a generative model and toolkit for 3D reconstruction of molecular st
 - **3D reconstruction**: Reconstruct molecular structures from cryoET particle data
 - **Evaluation metrics**: Comprehensive metrics for embeddings, reconstructions, and poses
 - **Classification evaluation**: Statistical validation for classification tasks with cross-validation
+- **OOD reconstruction evaluation**: Zero-shot evaluation on out-of-distribution experimental data
 - **Pose analysis**: Utilities for 3D rotation analysis and alignment
 - **Inference server**: FastAPI-based server for model inference
 - **Gaussian splats**: Extract Gaussian splat representations for visualization
@@ -87,6 +88,64 @@ This will generate:
 
 See `examples/classification_config.yaml` for configuration options.
 
+### Out-of-Distribution Reconstruction Evaluation
+
+Evaluate zero-shot reconstruction performance on experimental data:
+
+```bash
+# Run OOD evaluation on ML Challenge data
+python -m cryolens.scripts.evaluate_ood_reconstruction \
+    --checkpoint models/cryolens_epoch_2600.pt \
+    --copick-config ml_challenge_experimental.json \
+    --structures-dir structures/mrcs/ \
+    --output-dir results/ood/ \
+    --structures ribosome thyroglobulin \
+    --n-particles 25
+```
+
+This will generate for each structure:
+- `{structure}_results.h5` - HDF5 file with all data for reproducibility
+- `{structure}_results.png` - Figure showing ground truth, reconstruction, and metrics
+- `evaluation_summary.json` - Summary of all metrics
+
+The evaluation computes:
+- **FSC resolution** at 0.5 threshold vs particle count
+- **Correlation** with ground truth vs particle count
+- **Uncertainty estimates** through resampling
+
+See `examples/ood_reconstruction_config.yaml` for configuration options.
+
+**Programmatic usage:**
+
+```python
+from cryolens.evaluation import evaluate_ood_structure
+from cryolens.inference.pipeline import create_inference_pipeline
+from cryolens.data import CopickDataLoader
+
+# Setup
+device = torch.device("cuda")
+model, config = load_vae_model("checkpoint.pt", device=device, load_config=True)
+pipeline = create_inference_pipeline("checkpoint.pt", device=device)
+copick_loader = CopickDataLoader("copick_config.json")
+
+# Evaluate single structure
+result = evaluate_ood_structure(
+    structure_name="ribosome",
+    model=model,
+    pipeline=pipeline,
+    copick_loader=copick_loader,
+    ground_truth_path=Path("structures/6qzp.mrc"),
+    output_dir=Path("results/ribosome"),
+    device=device,
+    n_particles=25,
+    n_resamples=10
+)
+
+# Access metrics
+for n, metrics in result['metrics'].items():
+    print(f"n={n}: {metrics['resolution']:.1f}Å, r={metrics['correlation']:.3f}")
+```
+
 ### Reconstruction Quality Metrics
 
 Evaluate 3D reconstruction quality:
@@ -94,7 +153,8 @@ Evaluate 3D reconstruction quality:
 ```python
 from cryolens.evaluation import (
     compute_reconstruction_metrics,
-    compute_fourier_shell_correlation
+    compute_fourier_shell_correlation,
+    compute_fsc_with_threshold
 )
 
 # Compute reconstruction metrics
@@ -106,9 +166,14 @@ print(f"Contrast: {metrics['contrast']:.2f}")
 print(f"Edge strength: {metrics['edge_strength']:.3f}")
 print(f"SNR estimate: {metrics['snr_estimate']:.1f} dB")
 
-# Compute Fourier Shell Correlation
-fsc = compute_fourier_shell_correlation(volume1, volume2)
-print(f"Resolution at FSC=0.143: {fsc['resolution']:.1f} voxels")
+# Compute FSC with threshold-based resolution estimation
+resolutions, fsc_values, resolution_at_half = compute_fsc_with_threshold(
+    volume1, volume2,
+    voxel_size=10.0,
+    threshold=0.5,
+    mask_radius=20.0
+)
+print(f"Resolution at FSC=0.5: {resolution_at_half:.1f}Å")
 ```
 
 ### Integrated Evaluation
