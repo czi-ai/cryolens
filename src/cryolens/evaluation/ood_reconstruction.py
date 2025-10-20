@@ -94,6 +94,7 @@ def align_volume(
     Align volume to reference using cross-correlation.
     
     Performs coarse rotational search followed by optional refinement.
+    Rotation is performed about the center of the volume.
     
     Parameters
     ----------
@@ -112,20 +113,35 @@ def align_volume(
         Aligned volume
     correlation : float
         Correlation coefficient with reference
+        
+    Notes
+    -----
+    The rotation center is explicitly set to the center of the volume.
+    scipy.ndimage.rotate uses the volume center by default when reshape=False,
+    but we ensure this explicitly for clarity.
     """
     best_corr = -np.inf
     best_aligned = volume.copy()
     best_angle = 0
     best_axes = (0, 1)
-    best_shift = np.array([0, 0, 0])
     
     # Coarse search over 3 axis pairs
     for axis_config in [(0, 1), (0, 2), (1, 2)]:
         angles = np.linspace(0, 360, n_angles, endpoint=False)
         
         for angle in angles:
-            # Rotate
-            rotated = ndimage.rotate(volume, angle, axes=axis_config, reshape=False, order=1)
+            # Rotate about volume center
+            # reshape=False: keep output size same as input (implicitly uses center)
+            # order=1: linear interpolation (faster, sufficient for alignment)
+            # prefilter=False: skip spline prefiltering for speed
+            rotated = ndimage.rotate(
+                volume, 
+                angle, 
+                axes=axis_config, 
+                reshape=False, 
+                order=1,
+                prefilter=False
+            )
             
             # Find best shift using cross-correlation
             cross_corr = compute_3d_cross_correlation(reference, rotated)
@@ -144,14 +160,20 @@ def align_volume(
                 best_aligned = aligned.copy()
                 best_angle = angle
                 best_axes = axis_config
-                best_shift = shift
     
-    # Fine refinement
+    # Fine refinement around best angle
     if refine:
         refined_angles = np.linspace(best_angle - 10, best_angle + 10, 21)
         
         for angle in refined_angles:
-            rotated = ndimage.rotate(volume, angle, axes=best_axes, reshape=False, order=1)
+            rotated = ndimage.rotate(
+                volume,
+                angle,
+                axes=best_axes,
+                reshape=False,
+                order=1,
+                prefilter=False
+            )
             cross_corr = compute_3d_cross_correlation(reference, rotated)
             max_idx = np.unravel_index(np.argmax(cross_corr), cross_corr.shape)
             center = np.array(cross_corr.shape) // 2
