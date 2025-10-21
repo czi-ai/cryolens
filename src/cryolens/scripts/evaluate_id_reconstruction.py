@@ -7,14 +7,20 @@ as the OOD reconstruction script but loads data from parquet files instead of
 Copick.
 
 Usage:
+    # List all available structures in validation data
+    python -m cryolens.scripts.evaluate_id_reconstruction \
+        --list-structures \
+        --validation-dir data/validation/parquet/
+
+    # Evaluate specific structures
     python -m cryolens.scripts.evaluate_id_reconstruction \
         --checkpoint models/cryolens_epoch_2600.pt \
         --validation-dir data/validation/parquet/ \
         --structures-dir structures/mrcs/ \
         --output-dir results/id_validation/ \
-        --structures 6qzp 7vd8
+        --structures 1g3i 1n9g 1ss8
 
-For all structures:
+    # Auto-discover and evaluate all structures with MRC files
     python -m cryolens.scripts.evaluate_id_reconstruction \
         --checkpoint models/cryolens_epoch_2600.pt \
         --validation-dir data/validation/parquet/ \
@@ -43,15 +49,56 @@ from cryolens.evaluation.ood_reconstruction import (
 )
 
 
-# Structure mapping: parquet uses uppercase PDB codes
-STRUCTURE_MAPPING = {
-    "1fa2": "1fa2.mrc",  # beta-amylase
-    "6drv": "6drv.mrc",  # beta-galactoside
-    "6n4v": "6n4v.mrc",  # virus-like-particle
-    "6qzp": "6qzp.mrc",  # ribosome
-    "7b75": "7b75.mrc",  # thyroglobulin
-    "7vd8": "7vd8.mrc",  # apo-ferritin
-}
+def discover_available_structures(
+    validation_dir: Path,
+    snr: float = 5.0,
+    verbose: bool = True
+) -> List[str]:
+    """
+    Discover all unique structures available in validation parquet files.
+    
+    Parameters
+    ----------
+    validation_dir : Path
+        Directory containing validation parquet files
+    snr : float
+        SNR value for file matching
+    verbose : bool
+        Print discovery progress
+        
+    Returns
+    -------
+    List[str]
+        List of unique PDB codes found in the data
+    """
+    validation_dir = Path(validation_dir)
+    pattern = f"validation_*_snr{snr}.parquet"
+    parquet_files = sorted(validation_dir.glob(pattern))
+    
+    if not parquet_files:
+        raise ValueError(f"No validation parquet files found matching {pattern} in {validation_dir}")
+    
+    if verbose:
+        print(f"Scanning {len(parquet_files)} parquet files...")
+    
+    all_structures = set()
+    
+    for parquet_file in parquet_files:
+        try:
+            df = pd.read_parquet(parquet_file)
+            
+            # Find pdb_code column
+            for col_name in ['pdb_code', 'structure', 'pdb_id']:
+                if col_name in df.columns:
+                    structures = df[col_name].str.lower().unique()
+                    all_structures.update(structures)
+                    break
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not read {parquet_file.name}: {e}")
+            continue
+    
+    return sorted(list(all_structures))
 
 
 def load_id_validation_particles(
@@ -103,8 +150,8 @@ def load_id_validation_particles(
     if verbose:
         print(f"  Found {len(parquet_files)} validation parquet files")
     
-    # Normalize structure name to uppercase for matching
-    structure_upper = structure_name.upper()
+    # Normalize structure name to lowercase for matching
+    structure_lower = structure_name.lower()
     
     particles = []
     
@@ -134,8 +181,8 @@ def load_id_validation_particles(
                 print(f"    Warning: No PDB code column found in {parquet_file.name}")
             continue
         
-        # Filter for this structure
-        structure_df = df[df[pdb_col].str.upper() == structure_upper]
+        # Filter for this structure (case-insensitive)
+        structure_df = df[df[pdb_col].str.lower() == structure_lower]
         
         if len(structure_df) == 0:
             continue
@@ -235,8 +282,7 @@ class ParquetDataLoader:
             box_size = self.box_size
         
         if structure_filter is None:
-            # Try to detect available structures
-            structure_filter = list(STRUCTURE_MAPPING.keys())
+            raise ValueError("structure_filter must be provided")
         
         data = {}
         
@@ -271,11 +317,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Required arguments
+    # Special mode: list structures
+    parser.add_argument(
+        '--list-structures',
+        action='store_true',
+        help='List all available structures in validation data and exit'
+    )
+    
+    # Required for evaluation mode
     parser.add_argument(
         '--checkpoint',
         type=str,
-        required=True,
         help='Path to model checkpoint'
     )
     parser.add_argument(
@@ -287,13 +339,11 @@ def main():
     parser.add_argument(
         '--structures-dir',
         type=Path,
-        required=True,
         help='Directory containing ground truth MRC files'
     )
     parser.add_argument(
         '--output-dir',
         type=Path,
-        required=True,
         help='Output directory for results'
     )
     
@@ -301,9 +351,8 @@ def main():
     parser.add_argument(
         '--structures',
         nargs='+',
-        default=list(STRUCTURE_MAPPING.keys()),
-        choices=list(STRUCTURE_MAPPING.keys()),
-        help='Structures to evaluate (default: all)'
+        default=None,
+        help='Structures to evaluate (PDB codes, e.g., 1g3i 6qzp). Default: all structures with MRC files'
     )
     parser.add_argument(
         '--n-particles',
@@ -339,6 +388,51 @@ def main():
     
     args = parser.parse_args()
     
+    # Handle --list-structures mode
+    if args.list_structures:
+        print("="*70)
+        print("DISCOVERING AVAILABLE STRUCTURES")
+        print("="*70)
+        print(f"Validation dir: {args.validation_dir}")
+        print(f"SNR:            {args.snr}")
+        print()
+        
+        try:
+            structures = discover_available_structures(
+                args.validation_dir,
+                snr=args.snr,
+                verbose=True
+            )
+            
+            print(f"\n{'='*70}")
+            print(f"Found {len(structures)} unique structures")
+            print("="*70)
+            
+            # Print in columns
+            for i in range(0, len(structures), 8):
+                row = structures[i:i+8]
+                print("  " + "  ".join(f"{s:6s}" for s in row))
+            
+            print("="*70)
+            print(f"\nTo evaluate specific structures, use:")
+            print(f"  --structures {' '.join(structures[:5])} ...")
+            print(f"\nTo evaluate ALL structures with MRC files:")
+            print(f"  (omit --structures to auto-discover)")
+            
+        except Exception as e:
+            print(f"\n✗ Error discovering structures: {e}")
+            return 1
+        
+        return 0
+    
+    # Validate required arguments for evaluation mode
+    if args.checkpoint is None:
+        parser.error("--checkpoint is required for evaluation mode")
+    if args.structures_dir is None:
+        parser.error("--structures-dir is required for evaluation mode")
+    if args.output_dir is None:
+        parser.error("--output-dir is required for evaluation mode")
+    
     # Print configuration
     print("="*70)
     print("ID VALIDATION RECONSTRUCTION EVALUATION")
@@ -347,7 +441,7 @@ def main():
     print(f"Validation dir:    {args.validation_dir}")
     print(f"Structures dir:    {args.structures_dir}")
     print(f"Output dir:        {args.output_dir}")
-    print(f"Structures:        {', '.join(args.structures)}")
+    print(f"Structures:        {', '.join(args.structures) if args.structures else 'auto-discover'}")
     print(f"Particles:         {args.n_particles} per structure")
     print(f"Resamples:         {args.n_resamples} per particle")
     print(f"Voxel size:        {args.voxel_size}Å")
@@ -401,6 +495,46 @@ def main():
         print(f"  Error initializing parquet loader: {e}")
         return 1
     
+    # Determine which structures to process
+    if args.structures is None:
+        # Auto-discover: find structures that have both parquet data and MRC files
+        print("\nAuto-discovering structures with both validation data and MRC files...")
+        available_structures = discover_available_structures(
+            args.validation_dir,
+            snr=args.snr,
+            verbose=False
+        )
+        
+        # Check which ones have MRC files
+        structures_to_process = []
+        for structure in available_structures:
+            mrc_path = args.structures_dir / f"{structure}.mrc"
+            if mrc_path.exists():
+                structures_to_process.append(structure)
+        
+        if not structures_to_process:
+            print(f"\n✗ Error: No structures found with both validation data and MRC files")
+            print(f"  Validation data has {len(available_structures)} structures")
+            print(f"  MRC directory: {args.structures_dir}")
+            print(f"\nFirst 20 structures in validation data:")
+            for i in range(0, min(20, len(available_structures)), 5):
+                row = available_structures[i:i+5]
+                print(f"  {' '.join(row)}")
+            if len(available_structures) > 20:
+                print(f"  ... and {len(available_structures) - 20} more")
+            print(f"\nUse --list-structures to see all available structures")
+            return 1
+        
+        print(f"  Found {len(structures_to_process)} structures with both data and MRC files")
+        if len(structures_to_process) <= 10:
+            print(f"  Structures: {', '.join(structures_to_process)}")
+        else:
+            print(f"  First 10: {', '.join(structures_to_process[:10])}")
+            print(f"  ... and {len(structures_to_process) - 10} more")
+    else:
+        structures_to_process = [s.lower() for s in args.structures]
+        print(f"\nProcessing {len(structures_to_process)} specified structures")
+    
     # Create main output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -408,10 +542,10 @@ def main():
     results = {}
     errors = {}
     
-    for structure in args.structures:
+    for structure in structures_to_process:
         try:
-            # Get ground truth path
-            gt_filename = STRUCTURE_MAPPING[structure]
+            # Construct ground truth path from structure name
+            gt_filename = f"{structure}.mrc"
             gt_path = args.structures_dir / gt_filename
             
             if not gt_path.exists():
