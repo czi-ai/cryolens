@@ -30,6 +30,7 @@ from typing import List, Dict, Tuple, Optional
 from tqdm import tqdm
 from collections import defaultdict
 
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.gridspec import GridSpec
@@ -56,6 +57,31 @@ CONTAMINATION_RATIOS = [
     (1, 99),    # 99% contamination
     (0, 100),   # Pure Y
 ]
+
+
+def normalize_protein_name(name: str) -> str:
+    """Normalize protein names to consistent format."""
+    if pd.isna(name):
+        return 'unknown'
+    
+    # Standardize to lowercase with underscores
+    normalized = str(name).lower().replace('-', '_').replace(' ', '_')
+    
+    # Fix common naming inconsistencies
+    name_corrections = {
+        'beta_galactoside': 'beta_galactosidase',
+        'betagalactoside': 'beta_galactosidase',
+        'beta_amylase': 'beta_amylase',  # Keep as-is
+        'betaamylase': 'beta_amylase',
+        'apo_ferritin': 'apoferritin',
+        'apoferritin': 'apoferritin',
+        'virus_like_particle': 'virus_like_particle',  # Keep as-is
+        'vlp': 'virus_like_particle',
+        'ribosome': 'ribosome',  # Keep as-is
+        'thyroglobulin': 'thyroglobulin',  # Keep as-is
+    }
+    
+    return name_corrections.get(normalized, normalized)
 
 
 def load_or_generate_reconstructions(
@@ -830,8 +856,12 @@ def main():
     # Parse structure pairs
     structure_pairs = []
     for pair_str in args.structure_pairs:
-        s1, s2 = pair_str.split(',')
-        structure_pairs.append((s1.strip(), s2.strip()))
+        parts = pair_str.split(',')
+        s1, s2 = parts[0].strip(), parts[1].strip()
+        # Normalize structure names
+        s1 = normalize_protein_name(s1)
+        s2 = normalize_protein_name(s2)
+        structure_pairs.append((s1, s2))
     
     print(f"\nStructure pairs to evaluate: {len(structure_pairs)}")
     for s1, s2 in structure_pairs:
@@ -846,7 +876,7 @@ def main():
         print(f"Processing pair: {structure_x} vs {structure_y}")
         print(f"{'='*70}")
         
-        # Sample particles
+        # Sample particles (structure names already normalized)
         print(f"Sampling {args.n_particles} particles per structure...")
         try:
             particles_x = sample_particles_from_runs(
