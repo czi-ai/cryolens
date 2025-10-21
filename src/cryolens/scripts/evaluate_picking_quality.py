@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from tqdm import tqdm
 from collections import defaultdict
+from scipy import stats as scipy_stats
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -490,6 +491,223 @@ def analyze_contamination_scenario(
     return results
 
 
+def aggregate_repetitions(pair_dir: Path, n_reps: int) -> Dict:
+    """Collect results from all repetitions and compute statistics.
+    
+    Parameters
+    ----------
+    pair_dir : Path
+        Directory containing all repetition subdirectories
+    n_reps : int
+        Number of repetitions to aggregate
+        
+    Returns
+    -------
+    Dict
+        Aggregated statistics across repetitions
+    """
+    all_cohens_d = defaultdict(lambda: {'mse': [], 'mwl': []})
+    structure_names = None
+    
+    # Loop through repetitions and collect Cohen's d values
+    for rep_num in range(n_reps):
+        rep_dir = pair_dir / f"repetition_{rep_num:02d}"
+        
+        if not rep_dir.exists():
+            print(f"  Warning: Missing repetition {rep_num}, skipping...")
+            continue
+        
+        for ratio_x, ratio_y in CONTAMINATION_RATIOS:
+            if ratio_x == 0 or ratio_y == 0:
+                continue  # Skip pure cases
+            
+            results_file = rep_dir / f"contamination_{ratio_x}_{ratio_y}" / "results.json"
+            
+            if not results_file.exists():
+                print(f"  Warning: Missing results for rep {rep_num}, ratio {ratio_x}/{ratio_y}")
+                continue
+            
+            with open(results_file) as f:
+                result = json.load(f)
+            
+            # Store structure names from first valid result
+            if structure_names is None:
+                structure_names = (result['structure_x'], result['structure_y'])
+            
+            label = f"{ratio_x}/{ratio_y}"
+            if result['mse']['cohens_d'] is not None:
+                all_cohens_d[label]['mse'].append(result['mse']['cohens_d'])
+            if result['mwl']['cohens_d'] is not None:
+                all_cohens_d[label]['mwl'].append(result['mwl']['cohens_d'])
+    
+    # Compute aggregate statistics
+    aggregated = {
+        'structure_x': structure_names[0] if structure_names else 'unknown',
+        'structure_y': structure_names[1] if structure_names else 'unknown',
+        'n_repetitions': n_reps,
+        'contamination_levels': {}
+    }
+    
+    for label, values in all_cohens_d.items():
+        if len(values['mse']) == 0 and len(values['mwl']) == 0:
+            continue
+        
+        aggregated['contamination_levels'][label] = {}
+        
+        # MSE statistics
+        if len(values['mse']) > 0:
+            mse_values = np.array(values['mse'])
+            aggregated['contamination_levels'][label]['mse'] = {
+                'mean': float(np.mean(mse_values)),
+                'std': float(np.std(mse_values, ddof=1)),
+                'ci_lower': float(np.percentile(mse_values, 2.5)),
+                'ci_upper': float(np.percentile(mse_values, 97.5)),
+                'values': mse_values.tolist(),
+                'n_valid': len(mse_values)
+            }
+            
+            # Statistical test: is Cohen's d significantly > 0.5 (medium effect)?
+            if len(mse_values) > 1:
+                t_stat, p_val = scipy_stats.ttest_1samp(mse_values, 0.5, alternative='greater')
+                aggregated['contamination_levels'][label]['mse']['significant_medium'] = bool(p_val < 0.05)
+                aggregated['contamination_levels'][label]['mse']['p_value_medium'] = float(p_val)
+        
+        # MWL statistics
+        if len(values['mwl']) > 0:
+            mwl_values = np.array(values['mwl'])
+            aggregated['contamination_levels'][label]['mwl'] = {
+                'mean': float(np.mean(mwl_values)),
+                'std': float(np.std(mwl_values, ddof=1)),
+                'ci_lower': float(np.percentile(mwl_values, 2.5)),
+                'ci_upper': float(np.percentile(mwl_values, 97.5)),
+                'values': mwl_values.tolist(),
+                'n_valid': len(mwl_values)
+            }
+            
+            # Statistical test: is Cohen's d significantly > 0.5 (medium effect)?
+            if len(mwl_values) > 1:
+                t_stat, p_val = scipy_stats.ttest_1samp(mwl_values, 0.5, alternative='greater')
+                aggregated['contamination_levels'][label]['mwl']['significant_medium'] = bool(p_val < 0.05)
+                aggregated['contamination_levels'][label]['mwl']['p_value_medium'] = float(p_val)
+    
+    return aggregated
+
+
+def create_aggregate_summary_plot(
+    aggregated: Dict,
+    output_path: Path
+):
+    """Create summary plot with confidence intervals across repetitions.
+    
+    Parameters
+    ----------
+    aggregated : Dict
+        Aggregated statistics from aggregate_repetitions()
+    output_path : Path
+        Path to save figure
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+    
+    structure_x = aggregated['structure_x']
+    structure_y = aggregated['structure_y']
+    n_reps = aggregated['n_repetitions']
+    
+    # Prepare data
+    contamination_levels = sorted(aggregated['contamination_levels'].keys())
+    
+    # Plot MSE with confidence intervals
+    ax = axes[0]
+    x_pos = np.arange(len(contamination_levels))
+    
+    mse_means = []
+    mse_ci_lower = []
+    mse_ci_upper = []
+    
+    for label in contamination_levels:
+        mse_data = aggregated['contamination_levels'][label].get('mse', {})
+        if 'mean' in mse_data:
+            mse_means.append(mse_data['mean'])
+            mse_ci_lower.append(mse_data['mean'] - mse_data['ci_lower'])
+            mse_ci_upper.append(mse_data['ci_upper'] - mse_data['mean'])
+        else:
+            mse_means.append(0)
+            mse_ci_lower.append(0)
+            mse_ci_upper.append(0)
+    
+    # Asymmetric error bars for confidence intervals
+    ax.bar(x_pos, mse_means, alpha=0.7, color='steelblue', label=f'Mean (n={n_reps})')
+    ax.errorbar(x_pos, mse_means, yerr=[mse_ci_lower, mse_ci_upper],
+                fmt='none', ecolor='black', capsize=5, alpha=0.6, label='95% CI')
+    
+    # Add significance markers
+    for i, label in enumerate(contamination_levels):
+        mse_data = aggregated['contamination_levels'][label].get('mse', {})
+        if mse_data.get('significant_medium'):
+            ax.text(i, mse_means[i] + mse_ci_upper[i], '*',
+                   ha='center', va='bottom', fontsize=16, fontweight='bold', color='red')
+    
+    ax.set_xlabel('Contamination Ratio', fontweight='bold')
+    ax.set_ylabel("Cohen's d (MSE)", fontweight='bold')
+    ax.set_title(f'MSE Separability Across {n_reps} Repetitions\n(* = significantly > 0.5, p<0.05)',
+                fontsize=12, fontweight='bold')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(contamination_levels)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0.5, color='orange', linestyle='--', linewidth=1, alpha=0.5, label='Medium effect')
+    ax.axhline(y=0.8, color='red', linestyle='--', linewidth=1, alpha=0.5, label='Large effect')
+    
+    # Plot MWL with confidence intervals
+    ax = axes[1]
+    
+    mwl_means = []
+    mwl_ci_lower = []
+    mwl_ci_upper = []
+    
+    for label in contamination_levels:
+        mwl_data = aggregated['contamination_levels'][label].get('mwl', {})
+        if 'mean' in mwl_data:
+            mwl_means.append(mwl_data['mean'])
+            mwl_ci_lower.append(mwl_data['mean'] - mwl_data['ci_lower'])
+            mwl_ci_upper.append(mwl_data['ci_upper'] - mwl_data['mean'])
+        else:
+            mwl_means.append(0)
+            mwl_ci_lower.append(0)
+            mwl_ci_upper.append(0)
+    
+    ax.bar(x_pos, mwl_means, alpha=0.7, color='darkgreen', label=f'Mean (n={n_reps})')
+    ax.errorbar(x_pos, mwl_means, yerr=[mwl_ci_lower, mwl_ci_upper],
+                fmt='none', ecolor='black', capsize=5, alpha=0.6, label='95% CI')
+    
+    # Add significance markers
+    for i, label in enumerate(contamination_levels):
+        mwl_data = aggregated['contamination_levels'][label].get('mwl', {})
+        if mwl_data.get('significant_medium'):
+            ax.text(i, mwl_means[i] + mwl_ci_upper[i], '*',
+                   ha='center', va='bottom', fontsize=16, fontweight='bold', color='red')
+    
+    ax.set_xlabel('Contamination Ratio', fontweight='bold')
+    ax.set_ylabel("Cohen's d (MWL)", fontweight='bold')
+    ax.set_title(f'Missing Wedge Loss Separability Across {n_reps} Repetitions\n(* = significantly > 0.5, p<0.05)',
+                fontsize=12, fontweight='bold')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(contamination_levels)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0.5, color='orange', linestyle='--', linewidth=1, alpha=0.5)
+    ax.axhline(y=0.8, color='red', linestyle='--', linewidth=1, alpha=0.5)
+    
+    plt.suptitle(
+        f'Aggregate Analysis: {structure_x} vs {structure_y}',
+        fontsize=14,
+        fontweight='bold'
+    )
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def create_pair_summary_plot(
     results_list: List[Dict],
     output_path: Path
@@ -803,6 +1021,12 @@ def main():
         default=42,
         help='Random seed for reproducibility (default: 42)'
     )
+    parser.add_argument(
+        '--n-repetitions',
+        type=int,
+        default=1,
+        help='Number of repetitions with different particle samples (default: 1)'
+    )
     
     args = parser.parse_args()
     
@@ -814,6 +1038,7 @@ def main():
     print(f"Copick config:  {args.copick_config}")
     print(f"Output dir:     {args.output_dir}")
     print(f"Particles:      {args.n_particles} per structure")
+    print(f"Repetitions:    {args.n_repetitions}")
     print(f"Voxel size:     {args.voxel_size}Å")
     print(f"Random seed:    {args.random_seed}")
     print("="*70)
@@ -876,57 +1101,98 @@ def main():
         print(f"Processing pair: {structure_x} vs {structure_y}")
         print(f"{'='*70}")
         
-        # Sample particles (structure names already normalized)
-        print(f"Sampling {args.n_particles} particles per structure...")
-        try:
-            particles_x = sample_particles_from_runs(
-                copick_loader, structure_x, args.n_particles,
-                args.voxel_size, random_seed=args.random_seed
-            )
-            print(f"  Loaded {len(particles_x)} particles for {structure_x}")
+        # Loop over repetitions
+        for rep_num in range(args.n_repetitions):
+            if args.n_repetitions > 1:
+                print(f"\n--- Repetition {rep_num+1}/{args.n_repetitions} ---")
             
-            particles_y = sample_particles_from_runs(
-                copick_loader, structure_y, args.n_particles,
-                args.voxel_size, random_seed=args.random_seed + 1  # Different seed
-            )
-            print(f"  Loaded {len(particles_y)} particles for {structure_y}")
-        except Exception as e:
-            print(f"  Error loading particles: {e}")
-            continue
-        
-        # Generate or load cached reconstructions
-        print(f"Loading or generating reconstructions...")
-        reconstructions_x = load_or_generate_reconstructions(
-            particles_x, structure_x, cache_dir,
-            model, pipeline, device
-        )
-        reconstructions_y = load_or_generate_reconstructions(
-            particles_y, structure_y, cache_dir,
-            model, pipeline, device
-        )
-        
-        # Analyze each contamination ratio
-        pair_results = []
-        for ratio_x, ratio_y in CONTAMINATION_RATIOS:
-            scenario_dir = args.output_dir / pair_name / f"contamination_{ratio_x}_{ratio_y}"
+            # Use different seed for each repetition
+            rep_seed = args.random_seed + rep_num * 1000
             
-            result = analyze_contamination_scenario(
-                reconstructions_x, reconstructions_y,
-                structure_x, structure_y,
-                ratio_x, ratio_y,
-                mse_loss, mwl_loss,
-                device,
-                scenario_dir
+            # Sample particles (structure names already normalized)
+            print(f"Sampling {args.n_particles} particles per structure...")
+            try:
+                particles_x = sample_particles_from_runs(
+                    copick_loader, structure_x, args.n_particles,
+                    args.voxel_size, random_seed=rep_seed
+                )
+                print(f"  Loaded {len(particles_x)} particles for {structure_x}")
+                
+                particles_y = sample_particles_from_runs(
+                    copick_loader, structure_y, args.n_particles,
+                    args.voxel_size, random_seed=rep_seed + 1  # Different seed
+                )
+                print(f"  Loaded {len(particles_y)} particles for {structure_y}")
+            except Exception as e:
+                print(f"  Error loading particles: {e}")
+                continue
+            
+            # Generate or load cached reconstructions (with rep number in cache filename)
+            print(f"Loading or generating reconstructions...")
+            reconstructions_x = load_or_generate_reconstructions(
+                particles_x, f"{structure_x}_rep{rep_num:02d}", cache_dir,
+                model, pipeline, device
+            )
+            reconstructions_y = load_or_generate_reconstructions(
+                particles_y, f"{structure_y}_rep{rep_num:02d}", cache_dir,
+                model, pipeline, device
             )
             
-            pair_results.append(result)
+            # Analyze each contamination ratio (outputs to repetition_XX/ dir)
+            rep_output_dir = args.output_dir / pair_name / f"repetition_{rep_num:02d}"
+            pair_results = []
+            for ratio_x, ratio_y in CONTAMINATION_RATIOS:
+                scenario_dir = rep_output_dir / f"contamination_{ratio_x}_{ratio_y}"
+                
+                result = analyze_contamination_scenario(
+                    reconstructions_x, reconstructions_y,
+                    structure_x, structure_y,
+                    ratio_x, ratio_y,
+                    mse_loss, mwl_loss,
+                    device,
+                    scenario_dir
+                )
+                
+                pair_results.append(result)
+            
+            # Create pair summary plot for this repetition
+            if args.n_repetitions == 1:
+                print(f"Creating pair summary plot...")
+                pair_summary_path = args.output_dir / pair_name / f'{pair_name}_summary.png'
+                create_pair_summary_plot(pair_results, pair_summary_path)
         
-        all_results[pair_name] = pair_results
-        
-        # Create pair summary plot immediately
-        print(f"Creating pair summary plot...")
-        pair_summary_path = args.output_dir / pair_name / f'{pair_name}_summary.png'
-        create_pair_summary_plot(pair_results, pair_summary_path)
+        # After all repetitions, aggregate and create summary
+        if args.n_repetitions > 1:
+            print(f"\nAggregating results across {args.n_repetitions} repetitions...")
+            
+            try:
+                aggregated = aggregate_repetitions(
+                    args.output_dir / pair_name,
+                    args.n_repetitions
+                )
+                
+                # Save aggregated results
+                agg_results_path = args.output_dir / pair_name / 'aggregate_results.json'
+                with open(agg_results_path, 'w') as f:
+                    json.dump(aggregated, f, indent=2)
+                print(f"  Saved aggregated results to {agg_results_path}")
+                
+                # Create aggregate summary plot
+                print(f"  Creating aggregate summary plot...")
+                agg_plot_path = args.output_dir / pair_name / 'aggregate_summary.png'
+                create_aggregate_summary_plot(aggregated, agg_plot_path)
+                print(f"  Saved aggregate plot to {agg_plot_path}")
+                
+                # Store aggregated results for global plots
+                all_results[pair_name] = aggregated
+                
+            except Exception as e:
+                print(f"  Error during aggregation: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # Single repetition - use existing structure
+            all_results[pair_name] = pair_results
         
         # Update global summary plots progressively
         print(f"Updating global summary plots...")
