@@ -1,0 +1,73 @@
+# Example configuration for ID (in-distribution) reconstruction evaluation
+#
+# This configuration file shows how to evaluate CryoLens reconstruction
+# performance on validation data stored in parquet files.
+#
+# The validation data uses the same two-stage alignment process as OOD evaluation:
+# 1. Align all reconstructions to first particle (common reference frame)
+# 2. Average in reference frame, then align to ground truth for evaluation
+#
+# Usage:
+#   python -m cryolens.scripts.evaluate_id_reconstruction \
+#       --checkpoint /path/to/checkpoint.pt \
+#       --validation-dir /path/to/validation/parquet/ \
+#       --structures-dir /path/to/structures/mrcs/ \
+#       --output-dir /path/to/output/ \
+#       --structures 6qzp 7vd8 \
+#       --n-particles 100 \
+#       --particle-counts 5 10 15 20 25 50 75 100
+
+# Model configuration
+checkpoint: "/mnt/czi-sci-ai/imaging-models/cryolens/mlflow/outputs/alternating_curriculum/cryolens-sim-015/checkpoints/model_epoch_2600_train_loss_6.436.pt"
+
+# Data paths
+validation_dir: "/mnt/czi-sci-ai/imaging-models/data/cryolens/tomotwin/subvolume_zarr_v03/parquet_by_structSNR_05/validation"
+structures_dir: "/mnt/czi-sci-ai/imaging-models/data/cryolens/tomotwin/structures/mrcs"
+output_dir: "./results/id_validation"
+
+# Structures to evaluate (PDB codes)
+structures:
+  - "6qzp"  # ribosome
+  - "7vd8"  # apo-ferritin
+  - "7b75"  # thyroglobulin
+  - "1fa2"  # beta-amylase
+  - "6drv"  # beta-galactoside
+  - "6n4v"  # virus-like-particle
+
+# Processing parameters
+n_particles: 100              # Number of particles to process per structure
+n_resamples: 10               # Number of resamples for uncertainty estimation
+voxel_size: 10.0              # Voxel size in Angstroms
+snr: 5.0                      # SNR value for validation data files
+
+# Particle counts to evaluate
+# These determine how many particles to average for each metric point
+particle_counts:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  - 40
+  - 50
+  - 75
+  - 100
+
+# Validation data organization
+# The script expects parquet files with pattern: validation_NNNN_snr{snr}.parquet
+# Each file should contain:
+#   - subvolume or volume: particle volumes as bytes or arrays (48x48x48)
+#   - pdb_code or structure: structure identifier (uppercase)
+#   - orientation_quaternion (optional): particle orientations
+#
+# Example structure:
+#   validation/
+#   ├── validation_0001_snr5.0.parquet
+#   ├── validation_0002_snr5.0.parquet
+#   └── ...
+
+# Output files generated per structure:
+#   {structure}_results.h5      - HDF5 with all data for reproducibility
+#   {structure}_results.png     - Figure with ground truth, reconstruction, metrics
+#   evaluation_summary.json     - Summary of all structures
