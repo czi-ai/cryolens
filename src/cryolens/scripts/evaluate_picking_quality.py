@@ -797,6 +797,11 @@ def create_global_summary_plots(
     output_dir: Path
 ):
     """Create global summary plots across all structure pairs."""
+    # Skip if no results
+    if not all_results:
+        print("  No results to plot, skipping global summary plots")
+        return
+    
     figures_dir = output_dir / 'figures'
     figures_dir.mkdir(parents=True, exist_ok=True)
     
@@ -816,6 +821,10 @@ def create_separability_figure(
     save_path: Path
 ):
     """Create figure showing Cohen's d effect sizes for separability."""
+    # Skip if no results
+    if not all_results:
+        return
+    
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     
     # Collect data
@@ -900,6 +909,10 @@ def create_contamination_heatmap(
     save_path: Path
 ):
     """Create heatmap showing effect sizes across pairs and contamination levels."""
+    # Skip if no results
+    if not all_results:
+        return
+    
     # Prepare data for heatmap
     contamination_labels = ['99/1', '90/10', '50/50', '10/90', '1/99']
     pair_names = list(all_results.keys())
@@ -1078,14 +1091,12 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = args.output_dir / 'reconstruction_cache'
     
-    # Parse structure pairs
+    # Parse structure pairs (keep original names for Copick queries)
     structure_pairs = []
     for pair_str in args.structure_pairs:
         parts = pair_str.split(',')
         s1, s2 = parts[0].strip(), parts[1].strip()
-        # Normalize structure names
-        s1 = normalize_protein_name(s1)
-        s2 = normalize_protein_name(s2)
+        # Store original names for Copick, will normalize for file paths
         structure_pairs.append((s1, s2))
     
     print(f"\nStructure pairs to evaluate: {len(structure_pairs)}")
@@ -1096,9 +1107,15 @@ def main():
     all_results = {}
     
     for structure_x, structure_y in structure_pairs:
-        pair_name = f"{structure_x}_{structure_y}"
+        # Normalize names for file paths and organization
+        normalized_x = normalize_protein_name(structure_x)
+        normalized_y = normalize_protein_name(structure_y)
+        pair_name = f"{normalized_x}_{normalized_y}"
+        
         print(f"\n{'='*70}")
         print(f"Processing pair: {structure_x} vs {structure_y}")
+        if structure_x != normalized_x or structure_y != normalized_y:
+            print(f"  (Normalized to: {normalized_x} vs {normalized_y} for file paths)")
         print(f"{'='*70}")
         
         # Loop over repetitions
@@ -1109,7 +1126,7 @@ def main():
             # Use different seed for each repetition
             rep_seed = args.random_seed + rep_num * 1000
             
-            # Sample particles (structure names already normalized)
+            # Sample particles using ORIGINAL names (for Copick query)
             print(f"Sampling {args.n_particles} particles per structure...")
             try:
                 particles_x = sample_particles_from_runs(
@@ -1127,14 +1144,14 @@ def main():
                 print(f"  Error loading particles: {e}")
                 continue
             
-            # Generate or load cached reconstructions (with rep number in cache filename)
+            # Generate or load cached reconstructions (use normalized names for cache files)
             print(f"Loading or generating reconstructions...")
             reconstructions_x = load_or_generate_reconstructions(
-                particles_x, f"{structure_x}_rep{rep_num:02d}", cache_dir,
+                particles_x, f"{normalized_x}_rep{rep_num:02d}", cache_dir,
                 model, pipeline, device
             )
             reconstructions_y = load_or_generate_reconstructions(
-                particles_y, f"{structure_y}_rep{rep_num:02d}", cache_dir,
+                particles_y, f"{normalized_y}_rep{rep_num:02d}", cache_dir,
                 model, pipeline, device
             )
             
@@ -1146,7 +1163,7 @@ def main():
                 
                 result = analyze_contamination_scenario(
                     reconstructions_x, reconstructions_y,
-                    structure_x, structure_y,
+                    normalized_x, normalized_y,  # Use normalized names for results
                     ratio_x, ratio_y,
                     mse_loss, mwl_loss,
                     device,
@@ -1173,6 +1190,7 @@ def main():
                 
                 # Save aggregated results
                 agg_results_path = args.output_dir / pair_name / 'aggregate_results.json'
+                agg_results_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
                 with open(agg_results_path, 'w') as f:
                     json.dump(aggregated, f, indent=2)
                 print(f"  Saved aggregated results to {agg_results_path}")
