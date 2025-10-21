@@ -1,0 +1,16 @@
+# Particle Picking Quality Assessment Configuration
+
+# Example structure pairs for evaluation
+structure_pairs:
+  - ribosome,thyroglobulin
+  - beta-galactoside,virus-like-particle
+  - ribosome,beta-galactoside
+  - apoferritin,beta-amylase
+
+# Sampling parameters
+n_particles: 100
+voxel_size: 10.0
+random_seed: 42
+
+# Contamination ratios (automatically used)
+# - 100/0, 99/1, 90/10, 50/50, 10/90, 1/99, 0/100
