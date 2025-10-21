@@ -8,6 +8,7 @@ CryoLens is a generative model and toolkit for 3D reconstruction of molecular st
 - **3D reconstruction**: Reconstruct molecular structures from cryoET particle data
 - **Evaluation metrics**: Comprehensive metrics for embeddings, reconstructions, and poses
 - **Classification evaluation**: Statistical validation for classification tasks with cross-validation
+- **ID and OOD reconstruction evaluation**: Zero-shot evaluation on validation and experimental data
 - **OOD reconstruction evaluation**: Zero-shot evaluation on out-of-distribution experimental data
 - **Particle picking quality assessment**: Detect contaminated particle sets through reconstruction distance analysis
 - **Pose analysis**: Utilities for 3D rotation analysis and alignment
@@ -88,6 +89,38 @@ This will generate:
 - `classification_performance.png` - Comprehensive figure with overall and per-class results
 
 See `examples/classification_config.yaml` for configuration options.
+
+### In-Distribution (ID) Reconstruction Evaluation
+
+Evaluate reconstruction performance on validation data stored in parquet files:
+
+```bash
+# Run ID evaluation on validation data
+python -m cryolens.scripts.evaluate_id_reconstruction \
+    --checkpoint models/cryolens_epoch_2600.pt \
+    --validation-dir data/validation/parquet/ \
+    --structures-dir structures/mrcs/ \
+    --output-dir results/id_validation/ \
+    --structures 6qzp 7vd8 \
+    --n-particles 100 \
+    --particle-counts 5 10 15 20 25 50 75 100
+```
+
+This evaluates the model on validation data with the same methodology as OOD evaluation:
+- **Two-stage alignment**: Aligns reconstructions to first particle, then averages and aligns to ground truth
+- **FSC resolution** computation at different particle counts
+- **Correlation metrics** with ground truth
+- **Uncertainty estimation** through resampling
+
+The validation data should be organized as:
+```
+validation/
+├── validation_0001_snr5.0.parquet
+├── validation_0002_snr5.0.parquet
+└── ...
+```
+
+Each parquet file should contain columns: `subvolume` (or `volume`), `pdb_code` (or `structure`), and optionally `orientation_quaternion`.
 
 ### Out-of-Distribution Reconstruction Evaluation
 
