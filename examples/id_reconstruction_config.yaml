@@ -18,11 +18,11 @@
 #       --particle-counts 5 10 15 20 25 50 75 100
 
 # Model configuration
-checkpoint: "/mnt/czi-sci-ai/imaging-models/cryolens/mlflow/outputs/alternating_curriculum/cryolens-sim-015/checkpoints/model_epoch_2600_train_loss_6.436.pt"
+checkpoint: "./checkpoints/cryolens_v01.pt"
 
 # Data paths
-validation_dir: "/mnt/czi-sci-ai/imaging-models/data/cryolens/tomotwin/subvolume_zarr_v03/parquet_by_structSNR_05/validation"
-structures_dir: "/mnt/czi-sci-ai/imaging-models/data/cryolens/tomotwin/structures/mrcs"
+validation_dir: "./validation"
+structures_dir: "./mrcs"
 output_dir: "./results/id_validation"
 
 # Structures to evaluate (PDB codes)
