@@ -9,6 +9,7 @@ CryoLens is a generative model and toolkit for 3D reconstruction of molecular st
 - **Evaluation metrics**: Comprehensive metrics for embeddings, reconstructions, and poses
 - **Classification evaluation**: Statistical validation for classification tasks with cross-validation
 - **OOD reconstruction evaluation**: Zero-shot evaluation on out-of-distribution experimental data
+- **Particle picking quality assessment**: Detect contaminated particle sets through reconstruction distance analysis
 - **Pose analysis**: Utilities for 3D rotation analysis and alignment
 - **Inference server**: FastAPI-based server for model inference
 - **Gaussian splats**: Extract Gaussian splat representations for visualization
@@ -145,6 +146,40 @@ result = evaluate_ood_structure(
 for n, metrics in result['metrics'].items():
     print(f"n={n}: {metrics['resolution']:.1f}Å, r={metrics['correlation']:.3f}")
 ```
+
+### Particle Picking Quality Assessment
+
+Evaluate CryoLens's ability to detect contaminated particle sets by measuring reconstruction distances:
+
+```bash
+# Assess quality for structure pairs
+python -m cryolens.scripts.evaluate_picking_quality \
+    --checkpoint models/cryolens_epoch_2600.pt \
+    --copick-config ml_challenge_experimental.json \
+    --output-dir results/picking_quality/ \
+    --structure-pairs ribosome,thyroglobulin beta-galactoside,virus-like-particle \
+    --n-particles 100
+```
+
+This will generate:
+- **Per-scenario results**: Distance distributions (MSE and Missing Wedge Loss) for each contamination level
+- **Separability analysis**: Cohen's d effect sizes showing class discrimination ability
+- **Contamination heatmap**: Visual summary of detection performance across all structure pairs
+- **Distance arrays**: Raw distance measurements for further analysis
+
+The evaluation tests contamination ratios:
+- Pure cases: 100/0, 0/100
+- Light contamination: 99/1, 1/99
+- Moderate contamination: 90/10, 10/90
+- Heavy mixing: 50/50
+
+Key metrics computed:
+- **MSE distance**: Direct L2 difference between reconstructions
+- **Missing Wedge Loss distance**: Fourier-space weighted distance accounting for missing wedge
+- **Cohen's d**: Effect size measuring separability between contaminating classes
+- **Distribution statistics**: Mean, std, and overlap for each class
+
+See `examples/picking_quality_config.yaml` for configuration options.
 
 ### Reconstruction Quality Metrics
 
@@ -307,7 +342,7 @@ for structure_name, data in results.items():
     particles = data['particles']  # (N, 48, 48, 48) array
     orientations = data['orientations']  # (N, 3, 3) rotation matrices
     positions = data['positions']  # (N, 3) positions in Angstroms
-    print(f"{structure_name}: {len(particles)} particles loaded")
+    print(f"{structure_name}: {len(particles)} loaded")
 ```
 
 ### ML Challenge Datasets
