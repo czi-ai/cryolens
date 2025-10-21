@@ -54,8 +54,8 @@ CONTAMINATION_RATIOS = [
     (99, 1),    # 1% contamination
     (90, 10),   # 10% contamination
     (50, 50),   # 50/50 mix
-    (10, 90),   # 90% contamination
-    (1, 99),    # 99% contamination
+    # (10, 90),   # 90% contamination
+    # (1, 99),    # 99% contamination
     (0, 100),   # Pure Y
 ]
 
