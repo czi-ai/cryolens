@@ -833,24 +833,39 @@ def create_separability_figure(
     mwl_cohens_d = defaultdict(list)
     contamination_labels = []
     
-    for pair_name, results_list in all_results.items():
+    for pair_name, results_data in all_results.items():
         pair_names.append(pair_name)
         
-        for result in results_list:
-            ratio_x = result['ratio_x']
-            ratio_y = result['ratio_y']
-            
-            if ratio_x == 0 or ratio_y == 0:
-                continue
-            
-            label = f"{ratio_x}/{ratio_y}"
-            if label not in contamination_labels:
-                contamination_labels.append(label)
-            
-            if result['mse']['cohens_d'] is not None:
-                mse_cohens_d[label].append(abs(result['mse']['cohens_d']))
-            if result['mwl']['cohens_d'] is not None:
-                mwl_cohens_d[label].append(abs(result['mwl']['cohens_d']))
+        # Handle both aggregated results (dict) and per-scenario results (list)
+        if isinstance(results_data, dict):
+            # Aggregated results from multiple repetitions
+            if 'contamination_levels' in results_data:
+                for label, data in results_data['contamination_levels'].items():
+                    if label not in contamination_labels:
+                        contamination_labels.append(label)
+                    
+                    # Use mean Cohen's d from aggregated results
+                    if 'mse' in data and 'mean' in data['mse']:
+                        mse_cohens_d[label].append(abs(data['mse']['mean']))
+                    if 'mwl' in data and 'mean' in data['mwl']:
+                        mwl_cohens_d[label].append(abs(data['mwl']['mean']))
+        else:
+            # Per-scenario results from single repetition (list)
+            for result in results_data:
+                ratio_x = result['ratio_x']
+                ratio_y = result['ratio_y']
+                
+                if ratio_x == 0 or ratio_y == 0:
+                    continue
+                
+                label = f"{ratio_x}/{ratio_y}"
+                if label not in contamination_labels:
+                    contamination_labels.append(label)
+                
+                if result['mse']['cohens_d'] is not None:
+                    mse_cohens_d[label].append(abs(result['mse']['cohens_d']))
+                if result['mwl']['cohens_d'] is not None:
+                    mwl_cohens_d[label].append(abs(result['mwl']['cohens_d']))
     
     # Plot MSE Cohen's d
     ax = axes[0]
@@ -921,18 +936,32 @@ def create_contamination_heatmap(
     mwl_matrix = np.zeros((len(pair_names), len(contamination_labels)))
     
     for i, pair_name in enumerate(pair_names):
-        results_list = all_results[pair_name]
-        for result in results_list:
-            ratio_x = result['ratio_x']
-            ratio_y = result['ratio_y']
-            label = f"{ratio_x}/{ratio_y}"
-            
-            if label in contamination_labels:
-                j = contamination_labels.index(label)
-                if result['mse']['cohens_d'] is not None:
-                    mse_matrix[i, j] = abs(result['mse']['cohens_d'])
-                if result['mwl']['cohens_d'] is not None:
-                    mwl_matrix[i, j] = abs(result['mwl']['cohens_d'])
+        results_data = all_results[pair_name]
+        
+        # Handle both aggregated results (dict) and per-scenario results (list)
+        if isinstance(results_data, dict):
+            # Aggregated results from multiple repetitions
+            if 'contamination_levels' in results_data:
+                for label, data in results_data['contamination_levels'].items():
+                    if label in contamination_labels:
+                        j = contamination_labels.index(label)
+                        if 'mse' in data and 'mean' in data['mse']:
+                            mse_matrix[i, j] = abs(data['mse']['mean'])
+                        if 'mwl' in data and 'mean' in data['mwl']:
+                            mwl_matrix[i, j] = abs(data['mwl']['mean'])
+        else:
+            # Per-scenario results from single repetition (list)
+            for result in results_data:
+                ratio_x = result['ratio_x']
+                ratio_y = result['ratio_y']
+                label = f"{ratio_x}/{ratio_y}"
+                
+                if label in contamination_labels:
+                    j = contamination_labels.index(label)
+                    if result['mse']['cohens_d'] is not None:
+                        mse_matrix[i, j] = abs(result['mse']['cohens_d'])
+                    if result['mwl']['cohens_d'] is not None:
+                        mwl_matrix[i, j] = abs(result['mwl']['cohens_d'])
     
     # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
