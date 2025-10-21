@@ -6,6 +6,11 @@ sets by measuring distances between individual reconstructions and averaged
 reconstructions. Contamination is detected through MSE and Missing Wedge Loss
 distance metrics.
 
+Features:
+- Caches reconstructions for reuse across contamination scenarios
+- Generates plots progressively as scenarios complete
+- Supports resuming from partial runs
+
 Usage:
     python -m cryolens.scripts.evaluate_picking_quality \
         --checkpoint models/cryolens_epoch_2600.pt \
@@ -23,13 +28,11 @@ import mrcfile
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from tqdm import tqdm
-from itertools import combinations
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.gridspec import GridSpec
-from scipy import stats
 
 from cryolens.utils.checkpoint_loading import load_vae_model
 from cryolens.inference.pipeline import InferencePipeline
@@ -53,6 +56,99 @@ CONTAMINATION_RATIOS = [
     (1, 99),    # 99% contamination
     (0, 100),   # Pure Y
 ]
+
+
+def load_or_generate_reconstructions(
+    particles: List[np.ndarray],
+    structure_name: str,
+    cache_dir: Path,
+    model: torch.nn.Module,
+    pipeline: InferencePipeline,
+    device: torch.device
+) -> List[np.ndarray]:
+    """
+    Load reconstructions from cache or generate and cache them.
+    
+    Parameters
+    ----------
+    particles : List[np.ndarray]
+        Input particles
+    structure_name : str
+        Name of structure (for cache file naming)
+    cache_dir : Path
+        Directory for cache files
+    model : torch.nn.Module
+        Trained model
+    pipeline : InferencePipeline
+        Inference pipeline
+    device : torch.device
+        Computation device
+        
+    Returns
+    -------
+    List[np.ndarray]
+        Aligned reconstructions
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"{structure_name}_reconstructions.h5"
+    
+    # Try to load from cache
+    if cache_file.exists():
+        print(f"    Loading cached reconstructions from {cache_file}")
+        try:
+            reconstructions = []
+            with h5py.File(cache_file, 'r') as f:
+                n_particles = len([k for k in f.keys() if k.startswith('recon_')])
+                for i in range(n_particles):
+                    reconstructions.append(f[f'recon_{i:03d}'][:])
+            
+            if len(reconstructions) == len(particles):
+                print(f"    Successfully loaded {len(reconstructions)} cached reconstructions")
+                return reconstructions
+            else:
+                print(f"    Cache has {len(reconstructions)} reconstructions but need {len(particles)}, regenerating...")
+        except Exception as e:
+            print(f"    Error loading cache: {e}, regenerating...")
+    
+    # Generate reconstructions
+    print(f"    Generating and caching reconstructions...")
+    all_reconstructions = []
+    reference_reconstruction = None
+    
+    for idx, particle in enumerate(tqdm(particles, desc="    Processing", leave=False)):
+        # Generate reconstruction (single sample for deterministic results)
+        recons = generate_resampled_reconstructions(
+            particle, model, pipeline, device,
+            n_samples=1,
+            noise_level=0.0,
+            target_shape=(48, 48, 48)
+        )
+        
+        # Normalize
+        recon_norm = normalize_volume_zscore(recons[0])
+        
+        # Set reference from first particle
+        if idx == 0:
+            reference_reconstruction = recon_norm
+            aligned_recon = recon_norm
+        else:
+            # Align to reference
+            aligned_recon, _ = align_volume(
+                reference_reconstruction, recon_norm,
+                n_angles=24, refine=True
+            )
+        
+        all_reconstructions.append(aligned_recon)
+    
+    # Save to cache
+    print(f"    Saving {len(all_reconstructions)} reconstructions to cache...")
+    with h5py.File(cache_file, 'w') as f:
+        f.attrs['structure_name'] = structure_name
+        f.attrs['n_particles'] = len(all_reconstructions)
+        for i, recon in enumerate(all_reconstructions):
+            f.create_dataset(f'recon_{i:03d}', data=recon, compression='gzip')
+    
+    return all_reconstructions
 
 
 def sample_particles_from_runs(
@@ -115,7 +211,7 @@ def sample_particles_from_runs(
     
     # Apply masking
     sampled_particles = [
-        apply_soft_mask(p, radius=22, soft_edge=5) 
+        apply_soft_mask(p, radius=22, soft_edge=5)
         for p in sampled_particles
     ]
     
@@ -173,29 +269,86 @@ def compute_reconstruction_distances(
     return np.array(mse_distances), np.array(mwl_distances)
 
 
+def create_scenario_plot(
+    result: Dict,
+    output_path: Path,
+    mse_distances_x: np.ndarray,
+    mse_distances_y: np.ndarray,
+    mwl_distances_x: np.ndarray,
+    mwl_distances_y: np.ndarray
+):
+    """Create immediate plot for a single contamination scenario."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    structure_x = result['structure_x']
+    structure_y = result['structure_y']
+    ratio_x = result['ratio_x']
+    ratio_y = result['ratio_y']
+    
+    # MSE violin plot
+    ax = axes[0]
+    if len(mse_distances_x) > 0 and len(mse_distances_y) > 0:
+        parts = ax.violinplot(
+            [mse_distances_x, mse_distances_y],
+            positions=[0, 1],
+            showmeans=True,
+            showmedians=True
+        )
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels([structure_x, structure_y])
+        ax.set_ylabel('MSE Distance to Average', fontweight='bold')
+        ax.set_title(f'MSE Distances\nCohen\'s d = {result["mse"]["cohens_d"]:.2f}',
+                    fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+    
+    # MWL violin plot
+    ax = axes[1]
+    if len(mwl_distances_x) > 0 and len(mwl_distances_y) > 0:
+        parts = ax.violinplot(
+            [mwl_distances_x, mwl_distances_y],
+            positions=[0, 1],
+            showmeans=True,
+            showmedians=True
+        )
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels([structure_x, structure_y])
+        ax.set_ylabel('Missing Wedge Loss Distance to Average', fontweight='bold')
+        ax.set_title(f'MWL Distances\nCohen\'s d = {result["mwl"]["cohens_d"]:.2f}',
+                    fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.suptitle(
+        f'{structure_x} vs {structure_y}: {ratio_x}/{ratio_y} Contamination',
+        fontsize=14,
+        fontweight='bold'
+    )
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def analyze_contamination_scenario(
-    particles_x: List[np.ndarray],
-    particles_y: List[np.ndarray],
+    reconstructions_x: List[np.ndarray],
+    reconstructions_y: List[np.ndarray],
     structure_x: str,
     structure_y: str,
     ratio_x: int,
     ratio_y: int,
-    model: torch.nn.Module,
-    pipeline: InferencePipeline,
     mse_loss: NormalizedMSELoss,
     mwl_loss: MissingWedgeLoss,
     device: torch.device,
     output_dir: Path
 ) -> Dict:
     """
-    Analyze single contamination scenario.
+    Analyze single contamination scenario using cached reconstructions.
     
     Parameters
     ----------
-    particles_x : List[np.ndarray]
-        Particles from structure X
-    particles_y : List[np.ndarray]
-        Particles from structure Y
+    reconstructions_x : List[np.ndarray]
+        Cached reconstructions from structure X
+    reconstructions_y : List[np.ndarray]
+        Cached reconstructions from structure Y
     structure_x : str
         Name of structure X
     structure_y : str
@@ -204,10 +357,6 @@ def analyze_contamination_scenario(
         Number of X particles
     ratio_y : int
         Number of Y particles
-    model : torch.nn.Module
-        Trained model
-    pipeline : InferencePipeline
-        Inference pipeline
     mse_loss : NormalizedMSELoss
         MSE loss function
     mwl_loss : MissingWedgeLoss
@@ -227,42 +376,18 @@ def analyze_contamination_scenario(
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Sample particles according to ratio
-    selected_x = particles_x[:ratio_x] if ratio_x > 0 else []
-    selected_y = particles_y[:ratio_y] if ratio_y > 0 else []
+    # Check if already computed
+    results_file = output_dir / 'results.json'
+    if results_file.exists():
+        print(f"    Scenario already analyzed, loading existing results...")
+        with open(results_file, 'r') as f:
+            return json.load(f)
     
-    all_particles = selected_x + selected_y
-    labels = [structure_x] * ratio_x + [structure_y] * ratio_y
+    # Select reconstructions according to ratio
+    selected_x = reconstructions_x[:ratio_x] if ratio_x > 0 else []
+    selected_y = reconstructions_y[:ratio_y] if ratio_y > 0 else []
     
-    # Generate reconstructions
-    print(f"    Generating reconstructions...")
-    all_reconstructions = []
-    reference_reconstruction = None
-    
-    for idx, particle in enumerate(tqdm(all_particles, desc="    Processing", leave=False)):
-        # Generate reconstruction (single sample for speed)
-        recons = generate_resampled_reconstructions(
-            particle, model, pipeline, device,
-            n_samples=1,
-            noise_level=0.0,  # No noise for deterministic results
-            target_shape=(48, 48, 48)
-        )
-        
-        # Normalize
-        recon_norm = normalize_volume_zscore(recons[0])
-        
-        # Set reference from first particle
-        if idx == 0:
-            reference_reconstruction = recon_norm
-            aligned_recon = recon_norm
-        else:
-            # Align to reference
-            aligned_recon, _ = align_volume(
-                reference_reconstruction, recon_norm, 
-                n_angles=24, refine=True
-            )
-        
-        all_reconstructions.append(aligned_recon)
+    all_reconstructions = selected_x + selected_y
     
     # Compute average reconstruction
     print(f"    Computing average reconstruction...")
@@ -296,7 +421,7 @@ def analyze_contamination_scenario(
             'y_mean': float(np.mean(mse_y)) if len(mse_y) > 0 else None,
             'y_std': float(np.std(mse_y)) if len(mse_y) > 0 else None,
             'cohens_d': float(
-                (np.mean(mse_x) - np.mean(mse_y)) / 
+                (np.mean(mse_x) - np.mean(mse_y)) /
                 np.sqrt((np.std(mse_x)**2 + np.std(mse_y)**2) / 2)
             ) if len(mse_x) > 0 and len(mse_y) > 0 else None,
         },
@@ -306,14 +431,14 @@ def analyze_contamination_scenario(
             'y_mean': float(np.mean(mwl_y)) if len(mwl_y) > 0 else None,
             'y_std': float(np.std(mwl_y)) if len(mwl_y) > 0 else None,
             'cohens_d': float(
-                (np.mean(mwl_x) - np.mean(mwl_y)) / 
+                (np.mean(mwl_x) - np.mean(mwl_y)) /
                 np.sqrt((np.std(mwl_x)**2 + np.std(mwl_y)**2) / 2)
             ) if len(mwl_x) > 0 and len(mwl_y) > 0 else None,
         }
     }
     
     # Save results
-    with open(output_dir / 'results.json', 'w') as f:
+    with open(results_file, 'w') as f:
         json.dump(results, f, indent=2)
     
     # Save distance arrays
@@ -326,61 +451,24 @@ def analyze_contamination_scenario(
     with mrcfile.new(output_dir / 'average_reconstruction.mrc', overwrite=True) as mrc:
         mrc.set_data(average_reconstruction.astype(np.float32))
     
+    # Create immediate plot for this scenario
+    print(f"    Creating scenario plot...")
+    create_scenario_plot(
+        results,
+        output_dir / 'scenario_plot.png',
+        mse_x, mse_y, mwl_x, mwl_y
+    )
+    
     print(f"    Results saved to {output_dir}")
     
     return results
 
 
-def create_quality_assessment_figures(
-    all_results: Dict[str, List[Dict]],
-    output_dir: Path
-):
-    """
-    Create comprehensive figures for quality assessment results.
-    
-    Parameters
-    ----------
-    all_results : Dict[str, List[Dict]]
-        Results organized by structure pair
-    output_dir : Path
-        Output directory for figures
-    """
-    print("\nCreating figures...")
-    
-    figures_dir = output_dir / 'figures'
-    figures_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Set style
-    sns.set_style("whitegrid")
-    plt.rcParams['font.size'] = 10
-    
-    # 1. Distance distributions across contamination levels
-    for pair_name, results_list in all_results.items():
-        create_distance_distribution_figure(
-            results_list,
-            figures_dir / f'{pair_name}_distributions.png'
-        )
-    
-    # 2. Separability analysis (Cohen's d effect sizes)
-    create_separability_figure(
-        all_results,
-        figures_dir / 'separability_analysis.png'
-    )
-    
-    # 3. Contamination detection heatmap
-    create_contamination_heatmap(
-        all_results,
-        figures_dir / 'contamination_heatmap.png'
-    )
-    
-    print(f"Figures saved to {figures_dir}")
-
-
-def create_distance_distribution_figure(
+def create_pair_summary_plot(
     results_list: List[Dict],
-    save_path: Path
+    output_path: Path
 ):
-    """Create box plot showing distance distributions across contamination levels."""
+    """Create summary plot for a single structure pair across all contamination levels."""
     fig, axes = plt.subplots(2, 1, figsize=(12, 10))
     
     structure_x = results_list[0]['structure_x']
@@ -416,7 +504,7 @@ def create_distance_distribution_figure(
     x_stds = [d['x_std'] for d in mse_data_x]
     y_stds = [d['y_std'] for d in mse_data_y]
     
-    ax.bar(x_pos - width/2, x_means, width, yerr=x_stds, 
+    ax.bar(x_pos - width/2, x_means, width, yerr=x_stds,
            label=structure_x, alpha=0.8, capsize=5)
     ax.bar(x_pos + width/2, y_means, width, yerr=y_stds,
            label=structure_y, alpha=0.8, capsize=5)
@@ -456,8 +544,27 @@ def create_distance_distribution_figure(
     )
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
+
+
+def create_global_summary_plots(
+    all_results: Dict[str, List[Dict]],
+    output_dir: Path
+):
+    """Create global summary plots across all structure pairs."""
+    figures_dir = output_dir / 'figures'
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Set style
+    sns.set_style("whitegrid")
+    plt.rcParams['font.size'] = 10
+    
+    # Separability analysis
+    create_separability_figure(all_results, figures_dir / 'separability_analysis.png')
+    
+    # Contamination heatmap
+    create_contamination_heatmap(all_results, figures_dir / 'contamination_heatmap.png')
 
 
 def create_separability_figure(
@@ -718,6 +825,7 @@ def main():
     
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = args.output_dir / 'reconstruction_cache'
     
     # Parse structure pairs
     structure_pairs = []
@@ -756,16 +864,26 @@ def main():
             print(f"  Error loading particles: {e}")
             continue
         
+        # Generate or load cached reconstructions
+        print(f"Loading or generating reconstructions...")
+        reconstructions_x = load_or_generate_reconstructions(
+            particles_x, structure_x, cache_dir,
+            model, pipeline, device
+        )
+        reconstructions_y = load_or_generate_reconstructions(
+            particles_y, structure_y, cache_dir,
+            model, pipeline, device
+        )
+        
         # Analyze each contamination ratio
         pair_results = []
         for ratio_x, ratio_y in CONTAMINATION_RATIOS:
             scenario_dir = args.output_dir / pair_name / f"contamination_{ratio_x}_{ratio_y}"
             
             result = analyze_contamination_scenario(
-                particles_x, particles_y,
+                reconstructions_x, reconstructions_y,
                 structure_x, structure_y,
                 ratio_x, ratio_y,
-                model, pipeline,
                 mse_loss, mwl_loss,
                 device,
                 scenario_dir
@@ -774,6 +892,15 @@ def main():
             pair_results.append(result)
         
         all_results[pair_name] = pair_results
+        
+        # Create pair summary plot immediately
+        print(f"Creating pair summary plot...")
+        pair_summary_path = args.output_dir / pair_name / f'{pair_name}_summary.png'
+        create_pair_summary_plot(pair_results, pair_summary_path)
+        
+        # Update global summary plots progressively
+        print(f"Updating global summary plots...")
+        create_global_summary_plots(all_results, args.output_dir)
     
     # Save overall summary
     summary_path = args.output_dir / 'contamination_summary.json'
@@ -782,13 +909,11 @@ def main():
     
     print(f"\nSaved summary to {summary_path}")
     
-    # Create figures
-    create_quality_assessment_figures(all_results, args.output_dir)
-    
     print("\n" + "="*70)
     print("EVALUATION COMPLETE")
     print("="*70)
     print(f"Results saved to: {args.output_dir}")
+    print(f"Figures saved to: {args.output_dir / 'figures'}")
     print("="*70)
 
 
