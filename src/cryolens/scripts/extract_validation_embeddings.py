@@ -248,26 +248,42 @@ class EmbeddingExtractor:
         row_indices : List[int]
             Row indices in source files
         """
-        # Stack volumes into batch
-        volumes_batch = np.stack(volumes)
+        from cryolens.utils.normalization import normalize_volume
         
-        # Process through pipeline to get embeddings
-        # We only need embeddings, not reconstructions
-        with torch.no_grad():
-            results = self.pipeline.process_batch(
-                volumes_batch,
-                batch_size=self.batch_size,
-                return_embeddings=True,
-                return_reconstruction=False
+        # Normalize volumes
+        normalized_batch = []
+        for volume in volumes:
+            # normalize_volume returns just the volume when return_stats=False
+            normalized = normalize_volume(
+                volume,
+                method=self.pipeline.normalization_method
             )
+            normalized_batch.append(normalized)
+        
+        # Convert to tensor with batch and channel dimensions
+        # Shape: (batch_size, 1, D, H, W)
+        volumes_tensor = torch.tensor(
+            np.stack(normalized_batch),
+            dtype=torch.float32
+        ).unsqueeze(1).to(self.pipeline.device)
+        
+        # Run through model encoder directly to get embeddings
+        with torch.no_grad():
+            mu, log_var, pose, global_weight = self.model.encode(volumes_tensor)
+            
+            # Convert to numpy
+            embeddings = mu.cpu().numpy()
+            log_vars = log_var.cpu().numpy()
+            poses = pose.cpu().numpy()
+            global_weights = global_weight.cpu().numpy()
         
         # Add to buffer
         for i in range(len(volumes)):
             self.buffer['pdb_codes'].append(pdb_codes[i])
-            self.buffer['embedding_mean'].append(results['embeddings'][i])
-            self.buffer['embedding_log_var'].append(results['log_var'][i])
-            self.buffer['pose'].append(results['pose'][i])
-            self.buffer['global_weight'].append(results['global_weight'][i])
+            self.buffer['embedding_mean'].append(embeddings[i])
+            self.buffer['embedding_log_var'].append(log_vars[i])
+            self.buffer['pose'].append(poses[i])
+            self.buffer['global_weight'].append(global_weights[i])
             self.buffer['source_file'].append(source_files[i])
             self.buffer['source_row_index'].append(row_indices[i])
         
