@@ -457,10 +457,10 @@ def analyze_contamination_scenario(
             'x_std': float(np.std(mwl_x)) if len(mwl_x) > 0 else None,
             'y_mean': float(np.mean(mwl_y)) if len(mwl_y) > 0 else None,
             'y_std': float(np.std(mwl_y)) if len(mwl_y) > 0 else None,
-            'cohens_d': float(
+            'cohens_d': abs(float(
                 (np.mean(mwl_x) - np.mean(mwl_y)) /
                 np.sqrt((np.std(mwl_x)**2 + np.std(mwl_y)**2) / 2)
-            ) if len(mwl_x) > 0 and len(mwl_y) > 0 else None,
+            )) if len(mwl_x) > 0 and len(mwl_y) > 0 else None,
         }
     }
     
