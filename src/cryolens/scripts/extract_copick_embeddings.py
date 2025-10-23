@@ -232,7 +232,7 @@ class CopickEmbeddingExtractor:
         # Collect all particles from picks
         particles_data = []
         
-        for picks in run.picks:
+        for picks in run.get_picks(portal_meta_query={'ground_truth_status': True}):
             structure_name = picks.pickable_object_name
             
             # Skip if no points
@@ -589,7 +589,7 @@ class CopickEmbeddingExtractor:
                 continue
             
             try:
-                # Extract embeddings for this run
+                # Extract embeddings for this run                
                 run_data = self.extract_run_embeddings(
                     run,
                     target_voxel_spacing=target_voxel_spacing,
@@ -609,7 +609,7 @@ class CopickEmbeddingExtractor:
                 # Update statistics
                 runs_processed += 1
                 total_particles += run_data['n_particles']
-                
+
                 for struct in run_data['structure_labels']:
                     struct_str = struct.decode('utf-8')
                     structure_counts[struct_str] = structure_counts.get(struct_str, 0) + 1
