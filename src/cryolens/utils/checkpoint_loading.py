@@ -91,11 +91,11 @@ def get_checkpoint_path(version_or_path: Optional[str] = None) -> str:
         # Create pooch fetcher for this version
         fetcher = pooch.create(
             path=pooch.os_cache("cryolens"),
-            base_url="",
+            base_url=url.rsplit('/', 1)[0] + "/",
             registry={filename: known_hash},
         )
         
-        checkpoint_path = fetcher.fetch(url)
+        checkpoint_path = fetcher.fetch(filename)
         logger.info(f"Cached at: {checkpoint_path}")
         return checkpoint_path
     
