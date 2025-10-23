@@ -496,7 +496,7 @@ class InferencePipeline:
 
 
 def create_inference_pipeline(
-    checkpoint_path: str,
+    checkpoint_path: Optional[str] = None,
     device: Optional[torch.device] = None
 ) -> InferencePipeline:
     """
@@ -504,8 +504,9 @@ def create_inference_pipeline(
     
     Parameters
     ----------
-    checkpoint_path : str
-        Path to model checkpoint
+    checkpoint_path : str, optional
+        Path to checkpoint, version name (e.g., 'v001'), or URL.
+        If None, uses default version.
     device : torch.device, optional
         Device for inference
         
@@ -513,6 +514,20 @@ def create_inference_pipeline(
     -------
     InferencePipeline
         Configured inference pipeline
+    
+    Examples
+    --------
+    >>> # Use default weights
+    >>> pipeline = create_inference_pipeline()
+    
+    >>> # Use specific version
+    >>> pipeline = create_inference_pipeline('v001')
+    
+    >>> # Use local checkpoint
+    >>> pipeline = create_inference_pipeline('/path/to/model.pt')
+    
+    >>> # Use URL
+    >>> pipeline = create_inference_pipeline('https://example.com/model.pt')
     """
     from cryolens.utils.checkpoint_loading import load_vae_model
     
