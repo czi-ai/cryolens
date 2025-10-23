@@ -5,18 +5,26 @@ This script evaluates CryoLens reconstruction quality on out-of-distribution
 experimental cryo-ET data from the ML Challenge dataset.
 
 Usage:
-    python -m cryolens.scripts.evaluate_ood_reconstruction \\
-        --checkpoint models/cryolens_epoch_2600.pt \\
-        --copick-config ml_challenge_experimental.json \\
-        --structures-dir structures/mrcs/ \\
-        --output-dir results/ood/ \\
+    # With default weights
+    python -m cryolens.scripts.evaluate_ood_reconstruction \
+        --copick-config ml_challenge_experimental.json \
+        --structures-dir structures/mrcs/ \
+        --output-dir results/ood/ \
+        --structures ribosome thyroglobulin
+
+    # With specific checkpoint
+    python -m cryolens.scripts.evaluate_ood_reconstruction \
+        --checkpoint models/cryolens_epoch_2600.pt \
+        --copick-config ml_challenge_experimental.json \
+        --structures-dir structures/mrcs/ \
+        --output-dir results/ood/ \
         --structures ribosome thyroglobulin
 
 For all structures:
-    python -m cryolens.scripts.evaluate_ood_reconstruction \\
-        --checkpoint models/cryolens_epoch_2600.pt \\
-        --copick-config ml_challenge_experimental.json \\
-        --structures-dir structures/mrcs/ \\
+    python -m cryolens.scripts.evaluate_ood_reconstruction \
+        --checkpoint models/cryolens_epoch_2600.pt \
+        --copick-config ml_challenge_experimental.json \
+        --structures-dir structures/mrcs/ \
         --output-dir results/ood/
 """
 
@@ -26,7 +34,7 @@ import torch
 from pathlib import Path
 from typing import Optional, List
 
-from cryolens.utils.checkpoint_loading import load_vae_model
+from cryolens.utils.checkpoint_loading import load_vae_model, list_available_versions
 from cryolens.inference.pipeline import InferencePipeline
 from cryolens.data import CopickDataLoader
 from cryolens.evaluation.ood_reconstruction import evaluate_ood_structure
@@ -50,29 +58,37 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Required arguments
+    # Checkpoint (now optional)
     parser.add_argument(
         '--checkpoint',
         type=str,
-        required=True,
-        help='Path to model checkpoint'
+        default=None,
+        help='Path to model checkpoint, version name (e.g., "v001"), or URL. '
+             'If not specified, uses default CryoLens weights. '
+             'Use --list-versions to see available versions.'
     )
+    
+    # List versions flag
+    parser.add_argument(
+        '--list-versions',
+        action='store_true',
+        help='List available model versions and exit'
+    )
+    
+    # Required arguments
     parser.add_argument(
         '--copick-config',
         type=str,
-        required=True,
         help='Path to Copick configuration file'
     )
     parser.add_argument(
         '--structures-dir',
         type=Path,
-        required=True,
         help='Directory containing ground truth MRC files'
     )
     parser.add_argument(
         '--output-dir',
         type=Path,
-        required=True,
         help='Output directory for results'
     )
     
@@ -112,11 +128,33 @@ def main():
     
     args = parser.parse_args()
     
+    # Handle --list-versions flag
+    if args.list_versions:
+        print("\nAvailable CryoLens model versions:")
+        print("=" * 60)
+        for version, description in list_available_versions().items():
+            print(f"  {version:10s}: {description}")
+        print("=" * 60)
+        print("\nUse --checkpoint <version> to specify a version")
+        print("Or omit --checkpoint to use the default version")
+        return 0
+    
+    # Validate required arguments for evaluation mode
+    if args.copick_config is None:
+        parser.error("--copick-config is required for evaluation mode")
+    if args.structures_dir is None:
+        parser.error("--structures-dir is required for evaluation mode")
+    if args.output_dir is None:
+        parser.error("--output-dir is required for evaluation mode")
+    
     # Print configuration
     print("="*70)
     print("OOD RECONSTRUCTION EVALUATION")
     print("="*70)
-    print(f"Checkpoint:     {args.checkpoint}")
+    if args.checkpoint:
+        print(f"Checkpoint:     {args.checkpoint}")
+    else:
+        print(f"Checkpoint:     <default weights>")
     print(f"Copick config:  {args.copick_config}")
     print(f"Structures dir: {args.structures_dir}")
     print(f"Output dir:     {args.output_dir}")
@@ -214,7 +252,7 @@ def main():
     
     summary = {
         'config': {
-            'checkpoint': args.checkpoint,
+            'checkpoint': args.checkpoint if args.checkpoint else 'default',
             'copick_config': args.copick_config,
             'structures_dir': str(args.structures_dir),
             'n_particles': args.n_particles,

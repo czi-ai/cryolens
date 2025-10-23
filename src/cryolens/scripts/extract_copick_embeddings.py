@@ -7,11 +7,23 @@ all particle picks. It is designed to be memory-efficient by loading one
 tomogram at a time and flushing results after each run.
 
 Usage:
+    # Use default weights
     python -m cryolens.scripts.extract_copick_embeddings \
-        --checkpoint models/cryolens_epoch_2600.pt \
         --copick-config data/copick_config.json \
         --output-h5 embeddings/copick_embeddings.h5 \
         --batch-size 64
+
+    # Use specific version
+    python -m cryolens.scripts.extract_copick_embeddings \
+        --checkpoint v001 \
+        --copick-config data/copick_config.json \
+        --output-h5 embeddings/copick_embeddings.h5
+
+    # Use local checkpoint
+    python -m cryolens.scripts.extract_copick_embeddings \
+        --checkpoint models/cryolens_epoch_2600.pt \
+        --copick-config data/copick_config.json \
+        --output-h5 embeddings/copick_embeddings.h5
 
 For specific structures:
     python -m cryolens.scripts.extract_copick_embeddings \
@@ -34,7 +46,7 @@ import torch
 import h5py
 from tqdm import tqdm
 
-from cryolens.utils.checkpoint_loading import load_vae_model
+from cryolens.utils.checkpoint_loading import load_vae_model, list_available_versions
 from cryolens.data import CopickDataLoader
 
 
@@ -48,7 +60,7 @@ class CopickEmbeddingExtractor:
     
     def __init__(
         self,
-        checkpoint_path: str,
+        checkpoint_path: Optional[str],
         copick_config_path: str,
         device: Optional[torch.device] = None
     ):
@@ -57,8 +69,8 @@ class CopickEmbeddingExtractor:
         
         Parameters
         ----------
-        checkpoint_path : str
-            Path to VAE checkpoint file
+        checkpoint_path : str, optional
+            Path to VAE checkpoint file, version name, or URL (None for default)
         copick_config_path : str
             Path to Copick configuration JSON
         device : Optional[torch.device]
@@ -82,7 +94,10 @@ class CopickEmbeddingExtractor:
     
     def load_model(self):
         """Load the VAE model from checkpoint."""
-        print(f"Loading VAE from checkpoint: {self.checkpoint_path}")
+        if self.checkpoint_path is None:
+            print("Loading VAE from default weights...")
+        else:
+            print(f"Loading VAE from checkpoint: {self.checkpoint_path}")
         
         try:
             self.model, self.config = load_vae_model(
@@ -691,7 +706,7 @@ class CopickEmbeddingExtractor:
             
             meta_grp = f.create_group('metadata')
             
-            meta_grp.attrs['checkpoint_path'] = str(self.checkpoint_path)
+            meta_grp.attrs['checkpoint_path'] = str(self.checkpoint_path) if self.checkpoint_path else 'default'
             meta_grp.attrs['copick_config_path'] = str(self.copick_config_path)
             meta_grp.attrs['box_size'] = box_size
             meta_grp.attrs['normalization_method'] = self.normalization_method
@@ -721,23 +736,32 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Required arguments
+    # Checkpoint argument (now optional)
     parser.add_argument(
         '--checkpoint',
         type=str,
-        required=True,
-        help='Path to VAE checkpoint file'
+        default=None,
+        help='Path to VAE checkpoint file, version name (e.g., "v001"), or URL. '
+             'If not specified, uses default CryoLens weights. '
+             'Use --list-versions to see available versions.'
     )
+    
+    # List versions flag
+    parser.add_argument(
+        '--list-versions',
+        action='store_true',
+        help='List available model versions and exit'
+    )
+    
+    # Required arguments (unless listing versions)
     parser.add_argument(
         '--copick-config',
         type=str,
-        required=True,
         help='Path to Copick configuration JSON file'
     )
     parser.add_argument(
         '--output-h5',
         type=str,
-        required=True,
         help='Path to output HDF5 file'
     )
     
@@ -789,11 +813,29 @@ def main():
     
     args = parser.parse_args()
     
+    # Handle --list-versions flag
+    if args.list_versions:
+        print("\nAvailable CryoLens model versions:")
+        print("=" * 60)
+        for version, description in list_available_versions().items():
+            print(f"  {version:10s}: {description}")
+        print("=" * 60)
+        print("\nUse --checkpoint <version> to specify a version")
+        print("Or omit --checkpoint to use the default version")
+        return 0
+    
+    # Validate required arguments when not listing versions
+    if not args.copick_config or not args.output_h5:
+        parser.error("--copick-config and --output-h5 are required (unless using --list-versions)")
+    
     # Print configuration
     print("=" * 60)
     print("COPICK EMBEDDINGS EXTRACTION")
     print("=" * 60)
-    print(f"Checkpoint:             {args.checkpoint}")
+    if args.checkpoint:
+        print(f"Checkpoint:             {args.checkpoint}")
+    else:
+        print(f"Checkpoint:             <default weights>")
     print(f"Copick config:          {args.copick_config}")
     print(f"Output HDF5:            {args.output_h5}")
     print(f"Batch size:             {args.batch_size}")
