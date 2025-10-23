@@ -568,8 +568,21 @@ def load_vae_model(
     }
     
     # Load or infer configuration
+    loaded_params = None
     if load_config:
-        loaded_params = load_training_parameters(checkpoint_path)
+        # First check if this is a registry checkpoint with training_params
+        for version_name, version_info in WEIGHTS_REGISTRY.items():
+            if 'training_params' in version_info:
+                # Check if the checkpoint_path matches this version
+                if checkpoint_path.endswith(version_info['url'].split('/')[-1]):
+                    loaded_params = version_info['training_params']
+                    logger.info(f"Using training params from registry for version {version_name}")
+                    break
+        
+        # If not found in registry, try loading from experiment directory
+        if loaded_params is None:
+            loaded_params = load_training_parameters(checkpoint_path)
+        
         if loaded_params:
             # Update config with loaded parameters, keeping defaults for missing keys
             for key in config.keys():
