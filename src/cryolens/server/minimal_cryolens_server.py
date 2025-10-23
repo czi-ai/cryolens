@@ -10,6 +10,13 @@ This server provides REST API endpoints for CryoLens VAE functionality including
 - Optional final convolution control
 
 Usage:
+    # Use default weights
+    python minimal_cryolens_server.py --port 8023
+    
+    # Use specific version
+    python minimal_cryolens_server.py --checkpoint v001 --port 8023
+    
+    # Use local checkpoint
     python minimal_cryolens_server.py --checkpoint /path/to/checkpoint.pt --port 8023
 
 Based on the original copick_server_fastapi.py but simplified to use only
@@ -40,7 +47,7 @@ logging.basicConfig(
 logger = logging.getLogger("cryolens.server")
 
 # Import refactored CryoLens modules
-from cryolens.utils.checkpoint_loading import load_vae_model
+from cryolens.utils.checkpoint_loading import load_vae_model, list_available_versions
 from cryolens.utils.normalization import normalize_volume, denormalize_volume, get_volume_statistics
 from cryolens.inference import InferencePipeline, create_inference_pipeline
 from cryolens.splats import extract_gaussian_splats
@@ -80,14 +87,14 @@ class BatchProcessingRequest(BaseModel):
 class CryoLensServer:
     """Minimal CryoLens FastAPI server using refactored modules."""
     
-    def __init__(self, checkpoint_path: str, device: Optional[str] = None):
+    def __init__(self, checkpoint_path: Optional[str] = None, device: Optional[str] = None):
         """
         Initialize the server with a model checkpoint.
         
         Parameters
         ----------
-        checkpoint_path : str
-            Path to the VAE checkpoint file
+        checkpoint_path : str, optional
+            Path to VAE checkpoint, version name, URL, or None for default weights
         device : str, optional
             Device to use ('cuda' or 'cpu'). If None, auto-detect.
         """
@@ -110,7 +117,10 @@ class CryoLensServer:
     def _load_model(self):
         """Load the VAE model and create inference pipeline."""
         try:
-            logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
+            if self.checkpoint_path is None:
+                logger.info("Loading model from default weights...")
+            else:
+                logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
             
             # Load model using refactored checkpoint loading
             self.model, self.config = load_vae_model(
@@ -200,7 +210,7 @@ class CryoLensServer:
                 "documentation": "https://github.com/czi-ai/cryolens/tree/refactor-core-utilities",
                 "model": {
                     "loaded": self.model is not None,
-                    "checkpoint": self.checkpoint_path,
+                    "checkpoint": self.checkpoint_path if self.checkpoint_path else "default weights",
                     "device": str(self.device),
                     "config": self.config if self.config else None
                 },
@@ -269,7 +279,7 @@ class CryoLensServer:
                 "status": "healthy",
                 "model_loaded": self.model is not None,
                 "device": str(self.device),
-                "checkpoint": self.checkpoint_path
+                "checkpoint": self.checkpoint_path if self.checkpoint_path else "default weights"
             }
         
         @app.get("/model_info")
@@ -586,9 +596,16 @@ class CryoLensServer:
 @click.option(
     '--checkpoint',
     '-c',
-    required=True,
-    type=click.Path(exists=True),
-    help='Path to VAE checkpoint file'
+    default=None,
+    type=str,
+    help='Path to VAE checkpoint, version name (e.g., "v001"), or URL. '
+         'If not specified, uses default CryoLens weights. '
+         'Use --list-versions to see available versions.'
+)
+@click.option(
+    '--list-versions',
+    is_flag=True,
+    help='List available model versions and exit'
 )
 @click.option(
     '--host',
@@ -624,13 +641,31 @@ class CryoLensServer:
     default='INFO',
     help='Logging level'
 )
-def main(checkpoint, host, port, cors, device, reload, log_level):
+def main(checkpoint, list_versions, host, port, cors, device, reload, log_level):
     """
     Start the CryoLens FastAPI server.
     
-    Example:
+    Examples:
+        # Use default weights
+        python minimal_cryolens_server.py -p 8023
+        
+        # Use specific version
+        python minimal_cryolens_server.py -c v001 -p 8023
+        
+        # Use local checkpoint
         python minimal_cryolens_server.py -c model.pt -p 8023
     """
+    # Handle --list-versions flag
+    if list_versions:
+        print("\nAvailable CryoLens model versions:")
+        print("=" * 60)
+        for version, description in list_available_versions().items():
+            print(f"  {version:10s}: {description}")
+        print("=" * 60)
+        print("\nUse --checkpoint <version> to specify a version")
+        print("Or omit --checkpoint to use the default version")
+        return 0
+    
     # Set logging level
     logging.getLogger().setLevel(getattr(logging, log_level))
     
@@ -645,7 +680,10 @@ def main(checkpoint, host, port, cors, device, reload, log_level):
         cors_origins = [origin.strip() for origin in cors.split(',')]
     
     logger.info(f"Starting CryoLens server")
-    logger.info(f"Checkpoint: {checkpoint}")
+    if checkpoint:
+        logger.info(f"Checkpoint: {checkpoint}")
+    else:
+        logger.info(f"Checkpoint: <default weights>")
     logger.info(f"Host: {host}:{port}")
     logger.info(f"CORS origins: {cors_origins}")
     logger.info(f"Device: {device or 'auto-detect'}")
