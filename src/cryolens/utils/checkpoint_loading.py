@@ -27,7 +27,35 @@ WEIGHTS_REGISTRY = {
     'v001': {
         'url': 'https://czi-cryolens.s3-us-west-2.amazonaws.com/weights/cryolens_v001.pt',
         'hash': 'f0de0ce03580091c53a1265efb4b2b0f38c952ad1a68a4cfb0a548d9c76f790e',
-        'description': 'CryoLens v0.1 production model'
+        'description': 'CryoLens v0.1 production model',
+        'training_params': {
+            "training_type": "alternating_curriculum",
+            "total_pdb_codes": 103,
+            "structures_per_phase": 10,
+            "epochs_per_phase": 100,
+            "max_sequential_phases": 11,
+            "latent_dims": 40,
+            "num_splats": 768,
+            "learning_rate": 0.0001,
+            "beta": 0.001,
+            "gamma": 10.0,
+            "batch_size": 128,
+            "latent_ratio": 0.8,
+            "wedge_weight_factor": 1e-05,
+            "reconstruction_loss": "missingwedgeloss",
+            "affinity_loss": "contrastive",
+            "max_epochs": 100000,
+            "samples_per_epoch": 512,
+            "snr_values": [5.0],
+            "augment": False,
+            "unique_experiment_id": "cryolens-sim-015",
+            "use_memory_bank": True,
+            "memory_bank_warmup_steps": 1000,
+            "memory_bank_activation_mode": "steps",
+            "memory_bank_weight": 0.5,
+            "contrastive_margin": 1.5,
+            "adaptive_weighting_power": 2.0
+        }
     },
     # Future versions can be added here:
     # 'v002': {
