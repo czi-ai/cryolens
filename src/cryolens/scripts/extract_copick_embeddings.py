@@ -235,6 +235,10 @@ class CopickEmbeddingExtractor:
         for picks in run.picks:
             structure_name = picks.pickable_object_name
             
+            # Skip if no points
+            if len(picks.points) == 0:
+                continue
+            
             # Apply structure filter
             if structure_filter and structure_name not in structure_filter:
                 continue
