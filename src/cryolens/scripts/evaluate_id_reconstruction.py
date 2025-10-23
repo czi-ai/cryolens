@@ -12,7 +12,14 @@ Usage:
         --list-structures \
         --validation-dir data/validation/parquet/
 
-    # Evaluate specific structures
+    # Evaluate with default weights
+    python -m cryolens.scripts.evaluate_id_reconstruction \
+        --validation-dir data/validation/parquet/ \
+        --structures-dir structures/mrcs/ \
+        --output-dir results/id_validation/ \
+        --structures 1g3i 1n9g 1ss8
+
+    # Evaluate with specific checkpoint
     python -m cryolens.scripts.evaluate_id_reconstruction \
         --checkpoint models/cryolens_epoch_2600.pt \
         --validation-dir data/validation/parquet/ \
@@ -40,7 +47,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from cryolens.utils.checkpoint_loading import load_vae_model
+from cryolens.utils.checkpoint_loading import load_vae_model, list_available_versions
 from cryolens.inference.pipeline import InferencePipeline
 from cryolens.data.parquet_loader import extract_volume_from_row
 from cryolens.evaluation.ood_reconstruction import (
@@ -317,23 +324,32 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Special mode: list structures
+    # Special modes
     parser.add_argument(
         '--list-structures',
         action='store_true',
         help='List all available structures in validation data and exit'
     )
+    parser.add_argument(
+        '--list-versions',
+        action='store_true',
+        help='List available model versions and exit'
+    )
     
-    # Required for evaluation mode
+    # Checkpoint (now optional)
     parser.add_argument(
         '--checkpoint',
         type=str,
-        help='Path to model checkpoint'
+        default=None,
+        help='Path to model checkpoint, version name (e.g., "v001"), or URL. '
+             'If not specified, uses default CryoLens weights. '
+             'Use --list-versions to see available versions.'
     )
+    
+    # Required for evaluation mode
     parser.add_argument(
         '--validation-dir',
         type=Path,
-        required=True,
         help='Directory containing validation parquet files'
     )
     parser.add_argument(
@@ -388,8 +404,22 @@ def main():
     
     args = parser.parse_args()
     
+    # Handle --list-versions flag
+    if args.list_versions:
+        print("\nAvailable CryoLens model versions:")
+        print("=" * 60)
+        for version, description in list_available_versions().items():
+            print(f"  {version:10s}: {description}")
+        print("=" * 60)
+        print("\nUse --checkpoint <version> to specify a version")
+        print("Or omit --checkpoint to use the default version")
+        return 0
+    
     # Handle --list-structures mode
     if args.list_structures:
+        if not args.validation_dir:
+            parser.error("--validation-dir is required with --list-structures")
+        
         print("="*70)
         print("DISCOVERING AVAILABLE STRUCTURES")
         print("="*70)
@@ -426,8 +456,8 @@ def main():
         return 0
     
     # Validate required arguments for evaluation mode
-    if args.checkpoint is None:
-        parser.error("--checkpoint is required for evaluation mode")
+    if args.validation_dir is None:
+        parser.error("--validation-dir is required for evaluation mode")
     if args.structures_dir is None:
         parser.error("--structures-dir is required for evaluation mode")
     if args.output_dir is None:
@@ -437,7 +467,10 @@ def main():
     print("="*70)
     print("ID VALIDATION RECONSTRUCTION EVALUATION")
     print("="*70)
-    print(f"Checkpoint:        {args.checkpoint}")
+    if args.checkpoint:
+        print(f"Checkpoint:        {args.checkpoint}")
+    else:
+        print(f"Checkpoint:        <default weights>")
     print(f"Validation dir:    {args.validation_dir}")
     print(f"Structures dir:    {args.structures_dir}")
     print(f"Output dir:        {args.output_dir}")
@@ -583,7 +616,7 @@ def main():
     
     summary = {
         'config': {
-            'checkpoint': args.checkpoint,
+            'checkpoint': args.checkpoint if args.checkpoint else 'default',
             'validation_dir': str(args.validation_dir),
             'structures_dir': str(args.structures_dir),
             'n_particles': args.n_particles,
