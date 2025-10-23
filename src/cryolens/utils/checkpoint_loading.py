@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 WEIGHTS_REGISTRY = {
     'v001': {
         'url': 'https://czi-cryolens.s3-us-west-2.amazonaws.com/weights/cryolens_v001.pt',
-        'hash': None,  # Will be added after generating hash
+        'hash': 'f0de0ce03580091c53a1265efb4b2b0f38c952ad1a68a4cfb0a548d9c76f790e',
         'description': 'CryoLens v0.1 production model'
     },
     # Future versions can be added here:
