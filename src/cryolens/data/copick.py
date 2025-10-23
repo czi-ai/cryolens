@@ -203,7 +203,7 @@ class CopickDataLoader:
                 continue
             
             # Process picks for each structure
-            for picks in run.picks:
+            for picks in run.get_picks(portal_meta_query={'ground_truth_status': True}):
                 structure_name = picks.pickable_object_name
                 
                 # Apply structure filter
