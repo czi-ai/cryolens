@@ -10,6 +10,7 @@ import sys
 import json
 import torch
 import logging
+import pooch
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Any, Union
 
@@ -19,6 +20,128 @@ from cryolens.models.decoders import SegmentedGaussianSplatDecoder, GaussianSpla
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+# Registry of available model weights
+WEIGHTS_REGISTRY = {
+    'v001': {
+        'url': 'https://czi-cryolens.s3-us-west-2.amazonaws.com/weights/cryolens_v001.pt',
+        'hash': None,  # Will be added after generating hash
+        'description': 'CryoLens v0.1 production model'
+    },
+    # Future versions can be added here:
+    # 'v002': {
+    #     'url': 'https://czi-cryolens.s3-us-west-2.amazonaws.com/weights/cryolens_v002.pt',
+    #     'hash': 'sha256:...',
+    #     'description': 'CryoLens v0.2 with improved...'
+    # },
+}
+
+DEFAULT_VERSION = 'v001'
+
+
+def get_checkpoint_path(version_or_path: Optional[str] = None) -> str:
+    """
+    Get checkpoint path - handles version names, URLs, local paths, or default.
+    
+    Parameters
+    ----------
+    version_or_path : str, optional
+        Can be:
+        - None: Use default version
+        - Version name (e.g., 'v001'): Download/cache that version
+        - URL (starts with 'http'): Download/cache from URL
+        - Local path: Return as-is
+    
+    Returns
+    -------
+    str
+        Local path to checkpoint file
+    
+    Examples
+    --------
+    >>> get_checkpoint_path()  # Uses default v001
+    '/home/user/.cache/cryolens/cryolens_v001.pt'
+    
+    >>> get_checkpoint_path('v001')  # Explicit version
+    '/home/user/.cache/cryolens/cryolens_v001.pt'
+    
+    >>> get_checkpoint_path('/local/model.pt')  # Local path
+    '/local/model.pt'
+    
+    >>> get_checkpoint_path('https://example.com/model.pt')  # URL
+    '/home/user/.cache/cryolens/model.pt'
+    """
+    # Case 1: None - use default version
+    if version_or_path is None:
+        version_or_path = DEFAULT_VERSION
+        logger.info(f"No checkpoint specified, using default version: {version_or_path}")
+    
+    # Case 2: Check if it's a version name
+    if version_or_path in WEIGHTS_REGISTRY:
+        version_info = WEIGHTS_REGISTRY[version_or_path]
+        url = version_info['url']
+        known_hash = version_info['hash']
+        
+        logger.info(f"Using version '{version_or_path}': {version_info['description']}")
+        
+        # Extract filename from URL
+        filename = url.split('/')[-1]
+        
+        # Create pooch fetcher for this version
+        fetcher = pooch.create(
+            path=pooch.os_cache("cryolens"),
+            base_url="",
+            registry={filename: known_hash},
+        )
+        
+        checkpoint_path = fetcher.fetch(url)
+        logger.info(f"Cached at: {checkpoint_path}")
+        return checkpoint_path
+    
+    # Case 3: Check if it's a URL
+    elif version_or_path.startswith('http://') or version_or_path.startswith('https://'):
+        logger.info(f"Downloading from URL: {version_or_path}")
+        
+        # Extract filename from URL
+        filename = version_or_path.split('/')[-1]
+        
+        # Create pooch fetcher for this URL (no hash verification for arbitrary URLs)
+        fetcher = pooch.create(
+            path=pooch.os_cache("cryolens"),
+            base_url="",
+            registry={filename: None},  # No hash for arbitrary URLs
+        )
+        
+        checkpoint_path = fetcher.fetch(version_or_path)
+        logger.info(f"Cached at: {checkpoint_path}")
+        return checkpoint_path
+    
+    # Case 4: Treat as local path
+    else:
+        if not Path(version_or_path).exists():
+            raise FileNotFoundError(
+                f"Checkpoint not found: {version_or_path}\n"
+                f"Available versions: {list(WEIGHTS_REGISTRY.keys())}\n"
+                f"Or provide a valid local path or URL."
+            )
+        logger.info(f"Using local checkpoint: {version_or_path}")
+        return version_or_path
+
+
+def list_available_versions() -> Dict[str, str]:
+    """
+    List all available model versions.
+    
+    Returns
+    -------
+    Dict[str, str]
+        Dictionary mapping version names to descriptions
+    """
+    return {
+        version: info['description'] 
+        for version, info in WEIGHTS_REGISTRY.items()
+    }
 
 
 def create_dummy_classes():
@@ -268,7 +391,7 @@ def infer_config_from_checkpoint(state_dict: Dict[str, torch.Tensor], checkpoint
 
 
 def load_vae_model(
-    checkpoint_path: str,
+    checkpoint_path: Optional[str] = None,
     device: Optional[torch.device] = None,
     load_config: bool = True,
     strict_loading: bool = False
@@ -278,8 +401,9 @@ def load_vae_model(
     
     Parameters
     ----------
-    checkpoint_path : str
-        Path to checkpoint file
+    checkpoint_path : str, optional
+        Path to checkpoint file, version name (e.g., 'v001'), or URL.
+        If None, uses default version. See get_checkpoint_path() for details.
     device : torch.device, optional
         Device to load model on
     load_config : bool
@@ -291,7 +415,24 @@ def load_vae_model(
     -------
     Tuple[AffinityVAE, Dict[str, Any]]
         Loaded VAE model and configuration
+    
+    Examples
+    --------
+    >>> # Use default weights
+    >>> model, config = load_vae_model()
+    
+    >>> # Use specific version
+    >>> model, config = load_vae_model('v001')
+    
+    >>> # Use local checkpoint
+    >>> model, config = load_vae_model('/path/to/model.pt')
+    
+    >>> # Use URL
+    >>> model, config = load_vae_model('https://example.com/model.pt')
     """
+    # Resolve checkpoint path (handles versions, URLs, local paths, or default)
+    checkpoint_path = get_checkpoint_path(checkpoint_path)
+    
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -661,6 +802,7 @@ def load_checkpoint_safe(
     if load_optimizer and 'optimizer_state_dict' in checkpoint:
         result['optimizer_state_dict'] = checkpoint['optimizer_state_dict']
     
+    return result
 
 
 # Keep the original load_checkpoint function for backward compatibility
