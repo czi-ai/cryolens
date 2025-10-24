@@ -12,20 +12,23 @@ Usage:
         --list-structures \
         --validation-dir data/validation/parquet/
 
-    # Evaluate with default weights
+    # Evaluate with default weights and default alignment
     python -m cryolens.scripts.evaluate_id_reconstruction \
         --validation-dir data/validation/parquet/ \
         --structures-dir structures/mrcs/ \
         --output-dir results/id_validation/ \
         --structures 1g3i 1n9g 1ss8
 
-    # Evaluate with specific checkpoint
+    # Evaluate with specific checkpoint and RANSAC-ICP alignment
     python -m cryolens.scripts.evaluate_id_reconstruction \
         --checkpoint models/cryolens_epoch_2600.pt \
         --validation-dir data/validation/parquet/ \
         --structures-dir structures/mrcs/ \
         --output-dir results/id_validation/ \
-        --structures 1g3i 1n9g 1ss8
+        --structures 1g3i 1n9g 1ss8 \
+        --alignment-method ransac_icp \
+        --weight-percentile 48.3 \
+        --sphere-radius 15.2
 
     # Auto-discover and evaluate all structures with MRC files
     python -m cryolens.scripts.evaluate_id_reconstruction \
@@ -402,6 +405,47 @@ def main():
         help='SNR value for validation data (default: 5.0)'
     )
     
+    # Alignment method arguments
+    parser.add_argument(
+        '--alignment-method',
+        type=str,
+        default='cross_correlation',
+        choices=['cross_correlation', 'fourier', 'gradient_descent', 'ransac_icp'],
+        help='Alignment method to use (default: cross_correlation)'
+    )
+    parser.add_argument(
+        '--angular-step',
+        type=float,
+        default=None,
+        help='Angular step for alignment search (method-specific default used if not specified)'
+    )
+    
+    # RANSAC-ICP specific parameters
+    parser.add_argument(
+        '--weight-percentile',
+        type=float,
+        default=48.3,
+        help='Weight percentile threshold for RANSAC-ICP (default: 48.3)'
+    )
+    parser.add_argument(
+        '--sphere-radius',
+        type=float,
+        default=15.2,
+        help='Sphere radius for RANSAC-ICP filtering (default: 15.2)'
+    )
+    parser.add_argument(
+        '--ransac-iterations',
+        type=int,
+        default=252,
+        help='Number of RANSAC iterations (default: 252)'
+    )
+    parser.add_argument(
+        '--icp-iterations',
+        type=int,
+        default=17,
+        help='Number of ICP refinement iterations (default: 17)'
+    )
+    
     args = parser.parse_args()
     
     # Handle --list-versions flag
@@ -479,6 +523,7 @@ def main():
     print(f"Resamples:         {args.n_resamples} per particle")
     print(f"Voxel size:        {args.voxel_size}Å")
     print(f"SNR:               {args.snr}")
+    print(f"Alignment:         {args.alignment_method}")
     print("="*70)
     
     # Setup device
@@ -571,6 +616,20 @@ def main():
     # Create main output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Prepare alignment kwargs
+    alignment_kwargs = {}
+    if args.angular_step is not None:
+        alignment_kwargs['angular_step'] = args.angular_step
+    
+    # Add RANSAC-ICP specific parameters
+    if args.alignment_method == 'ransac_icp':
+        alignment_kwargs.update({
+            'weight_percentile': args.weight_percentile,
+            'sphere_radius': args.sphere_radius,
+            'ransac_iterations': args.ransac_iterations,
+            'icp_iterations': args.icp_iterations,
+        })
+    
     # Evaluate each structure
     results = {}
     errors = {}
@@ -599,7 +658,9 @@ def main():
                 n_particles=args.n_particles,
                 n_resamples=args.n_resamples,
                 particle_counts=args.particle_counts,
-                voxel_size=args.voxel_size
+                voxel_size=args.voxel_size,
+                alignment_method=args.alignment_method,
+                alignment_kwargs=alignment_kwargs
             )
             
             results[structure] = result
@@ -623,7 +684,8 @@ def main():
             'n_resamples': args.n_resamples,
             'voxel_size': args.voxel_size,
             'snr': args.snr,
-            'particle_counts': args.particle_counts
+            'particle_counts': args.particle_counts,
+            'alignment_method': args.alignment_method
         },
         'results': {},
         'errors': errors
