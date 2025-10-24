@@ -33,6 +33,30 @@ from cryolens.evaluation.fsc import compute_fsc_with_threshold, apply_soft_mask
 from cryolens.utils.normalization import normalize_volume, denormalize_volume
 
 
+def average_splat_params(splat_params_list: List[Optional[Dict[str, np.ndarray]]]) -> Optional[Dict[str, np.ndarray]]:
+    """
+    Average splat parameters across multiple samples.
+    
+    Parameters
+    ----------
+    splat_params_list : List[Optional[Dict[str, np.ndarray]]]
+        List of splat parameter dicts, each with keys 'centroids', 'weights', 'sigmas'
+        
+    Returns
+    -------
+    Optional[Dict[str, np.ndarray]]
+        Averaged splat parameters with 'coordinates' key (note: renamed from 'centroids'), or None if any input is None
+    """
+    if any(sp is None for sp in splat_params_list):
+        return None
+    
+    return {
+        'coordinates': np.mean([sp['centroids'] for sp in splat_params_list], axis=0),
+        'weights': np.mean([sp['weights'] for sp in splat_params_list], axis=0),
+        'sigmas': np.mean([sp['sigmas'] for sp in splat_params_list], axis=0)
+    }
+
+
 def load_mrc_structure(mrc_path: Path, box_size: int = 48) -> np.ndarray:
     """
     Load and resize MRC structure file.
@@ -373,7 +397,9 @@ def evaluate_ood_structure(
     n_particles: int = 25,
     n_resamples: int = 10,
     particle_counts: List[int] = [5, 10, 15, 20, 25],
-    voxel_size: float = 10.0
+    voxel_size: float = 10.0,
+    alignment_method: str = 'cross_correlation',
+    alignment_kwargs: Optional[Dict] = None
 ) -> Dict:
     """
     Evaluate single structure OOD reconstruction performance.
@@ -406,14 +432,24 @@ def evaluate_ood_structure(
         Particle counts to evaluate
     voxel_size : float
         Voxel size in Angstroms
+    alignment_method : str
+        Alignment method: 'cross_correlation', 'fourier', 'gradient_descent', 'ransac_icp'
+    alignment_kwargs : Optional[Dict]
+        Additional keyword arguments for alignment method
         
     Returns
     -------
     Dict
         Evaluation results including metrics and paths
     """
+    from cryolens.splats.alignment_methods import align_volumes
+    
+    if alignment_kwargs is None:
+        alignment_kwargs = {}
+    
     print(f"\n{'='*60}")
     print(f"Evaluating: {structure_name}")
+    print(f"Alignment method: {alignment_method}")
     print(f"{'='*60}")
     
     # Create output directory
@@ -449,19 +485,36 @@ def evaluate_ood_structure(
     print("Applying soft masks to particles...")
     particles = [apply_soft_mask(p, radius=22, soft_edge=5) for p in particles]
     
+    # Check if splats are needed
+    needs_splats = alignment_method in ['ransac_icp']
+    
     # STAGE 1: Generate reconstructions and align to first particle
     print("\nSTAGE 1: Generating reconstructions and aligning to common reference...")
     all_reconstructions = []
     reference_reconstruction = None
+    reference_splats = None
     
     for idx, particle in enumerate(tqdm(particles, desc="Processing particles")):
-        # Generate n_resamples reconstructions with noise
-        recons = generate_resampled_reconstructions(
-            particle, model, pipeline, device,
-            n_samples=n_resamples,
-            noise_level=0.05,
-            target_shape=(48, 48, 48)
-        )
+        # Generate n_resamples reconstructions (with splats if needed)
+        if needs_splats:
+            recons, splat_params_list = generate_resampled_reconstructions(
+                particle, model, pipeline, device,
+                n_samples=n_resamples,
+                noise_level=0.05,
+                target_shape=(48, 48, 48),
+                return_splat_params=True
+            )
+            # Average splat parameters across resamples
+            avg_splats = average_splat_params(splat_params_list)
+        else:
+            recons = generate_resampled_reconstructions(
+                particle, model, pipeline, device,
+                n_samples=n_resamples,
+                noise_level=0.05,
+                target_shape=(48, 48, 48),
+                return_splat_params=False
+            )
+            avg_splats = None
         
         # Normalize reconstructions
         recons_norm = [normalize_volume_zscore(r) for r in recons]
@@ -469,6 +522,7 @@ def evaluate_ood_structure(
         # Set reference from first particle's mean reconstruction
         if idx == 0:
             reference_reconstruction = np.mean(recons_norm, axis=0)
+            reference_splats = avg_splats
             print(f"  Using first particle as alignment reference")
             # First particle is already aligned to itself
             aligned_recons = recons_norm
@@ -476,7 +530,17 @@ def evaluate_ood_structure(
             # Align each resample to the reference
             aligned_recons = []
             for recon_norm in recons_norm:
-                aligned, _ = align_volume(reference_reconstruction, recon_norm, n_angles=24, refine=True)
+                # Prepare splat params if needed
+                splat_tuple = (reference_splats, avg_splats) if needs_splats else None
+                
+                # Use unified alignment interface
+                aligned, score, rotation_matrix = align_volumes(
+                    reference_reconstruction,
+                    recon_norm,
+                    method=alignment_method,
+                    splat_params=splat_tuple,
+                    **alignment_kwargs
+                )
                 aligned_recons.append(aligned)
         
         # Average the aligned resamples
@@ -501,7 +565,14 @@ def evaluate_ood_structure(
         avg_in_ref_frame = np.mean(all_reconstructions[:n], axis=0)
         
         # NOW align the averaged reconstruction to GT for evaluation only
-        avg_aligned_to_gt, corr = align_volume(gt_normalized, avg_in_ref_frame, n_angles=24, refine=True)
+        # For GT alignment, always use cross_correlation method (not splat-based)
+        avg_aligned_to_gt, score, _ = align_volumes(
+            gt_normalized,
+            avg_in_ref_frame,
+            method='cross_correlation',
+            angular_step=30.0,
+            n_iterations=50
+        )
         
         # Compute FSC with masking
         # CRITICAL: Apply masking during FSC computation to prevent edge artifacts
@@ -537,6 +608,7 @@ def evaluate_ood_structure(
         f.attrs['structure_name'] = structure_name
         f.attrs['n_particles'] = len(particles)
         f.attrs['voxel_size'] = voxel_size
+        f.attrs['alignment_method'] = alignment_method
         
         # Save input particles for later analysis
         particles_grp = f.create_group('particles')
