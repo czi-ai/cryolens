@@ -5,20 +5,18 @@ This module provides multiple alignment methods for aligning reconstructed
 volumes, including both volume-based and splat-based approaches.
 
 Available methods:
-- volume: Volume-based cross-correlation alignment with coarse-to-fine search (default)
-- icp: ICP splat alignment (requires splats)
-- ransac_icp: RANSAC+ICP on Gaussian splats with filtering (requires splats)
+- cross_correlation: Volume-based alignment with coarse-to-fine search (default)
 - fourier: Fourier-based phase correlation (fast but less accurate)
-- gradient: Gradient descent refinement (most accurate for volumes, slowest)
+- gradient_descent: Gradient descent refinement (most accurate, slowest)
+- ransac_icp: RANSAC+ICP on Gaussian splats (fast, requires splats)
 """
 
 import numpy as np
-from typing import Tuple, Optional, Dict, Any, List
-from scipy.ndimage import affine_transform
+from typing import Tuple, Optional, Dict, Any
+from scipy.ndimage import affine_transform, rotate as ndimage_rotate
 from scipy.optimize import minimize
 from scipy.fft import fftn, ifftn, fftshift
 from scipy.spatial.distance import cdist
-from scipy.spatial.transform import Rotation as R
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,34 +24,33 @@ logger = logging.getLogger(__name__)
 
 # Default configurations for each method
 DEFAULT_CONFIGS = {
-    'volume': {
-        'n_angles_coarse': 24,
-        'n_angles_fine': 36,
-        'refine': True
-    },
-    'icp': {
-        'n_iterations': 50,
-        'n_init_attempts': 5,
-        'convergence_threshold': 1e-6
-    },
-    'ransac_icp': {
-        'weight_percentile': 25.0,
-        'sphere_radius': 15.0,
-        'ransac_iterations': 100,
-        'ransac_inlier_threshold': 2.0,
-        'icp_iterations': 10,
-        'icp_threshold': 2.0,
-        'min_samples': 3,
-        'box_size': 48,
-        'volume_center': None  # Will be computed as [box_size/2, box_size/2, box_size/2]
+    'cross_correlation': {
+        'angular_step': 30.0,
+        'n_iterations': 50
     },
     'fourier': {
-        'n_angles': 18,
+        'angular_step': 15.0
     },
-    'gradient': {
+    'gradient_descent': {
         'max_iter': 50,
-        'method': 'Powell',
-        'initial_alignment_method': 'volume'
+        'initial_method': 'cross_correlation'  # Warm start
+    },
+    'ransac_icp': {
+        # Optimized parameters from Optuna tuning
+        'weight_percentile': 48.3,
+        'sphere_radius': 15.2,
+        'ransac_iterations': 252,
+        'ransac_inlier_threshold': 1.63,
+        'icp_iterations': 17,
+        'icp_threshold': 3.19,
+        'min_samples': 10,
+        'max_samples': 36,
+        'use_adaptive_threshold': True,
+        'adaptive_threshold_percentile': 82,
+        'outlier_rejection_percentile': 99.6,
+        'icp_convergence_threshold': 0.000153,
+        'box_size': 48,
+        'volume_center': None  # Will be computed as box_size / 2
     }
 }
 
@@ -108,7 +105,7 @@ def apply_rotation_to_volume(volume: np.ndarray, rotation_matrix: np.ndarray) ->
     return rotated_volume
 
 
-def cross_correlation_score(vol1: np.ndarray, vol2: np.ndarray) -> float:
+def cross_correlation_3d(vol1: np.ndarray, vol2: np.ndarray) -> float:
     """
     Compute normalized cross-correlation between two volumes.
     Higher values indicate better alignment.
@@ -121,26 +118,15 @@ def cross_correlation_score(vol1: np.ndarray, vol2: np.ndarray) -> float:
     return correlation
 
 
-def chamfer_distance(A: np.ndarray, B: np.ndarray) -> float:
-    """Compute Chamfer distance between two point sets."""
-    if len(A) == 0 or len(B) == 0:
-        return float('inf')
-    
-    distances = cdist(A, B)
-    forward = np.min(distances, axis=1).mean()
-    backward = np.min(distances, axis=0).mean()
-    return (forward + backward) / 2
-
-
-def align_volume_based(
+def align_cross_correlation(
     template: np.ndarray,
     target: np.ndarray,
-    n_angles_coarse: int = 24,
-    n_angles_fine: int = 36,
-    refine: bool = True
+    angular_step: float = 30.0,
+    n_iterations: int = 50
 ) -> Tuple[np.ndarray, float, np.ndarray]:
     """
-    Volume-based cross-correlation alignment with coarse-to-fine search.
+    Find best rotation using cross-correlation optimization.
+    Uses coarse-to-fine search strategy.
     
     Parameters
     ----------
@@ -148,19 +134,17 @@ def align_volume_based(
         Template volume
     target : np.ndarray
         Target volume to align
-    n_angles_coarse : int
-        Number of angles to sample in coarse search
-    n_angles_fine : int
-        Number of angles to sample in fine search
-    refine : bool
-        Whether to perform fine refinement
+    angular_step : float
+        Angular step for coarse search in degrees
+    n_iterations : int
+        Number of iterations (not currently used)
         
     Returns
     -------
     aligned_volume : np.ndarray
         Aligned target volume
     score : float
-        Alignment quality score (cross-correlation)
+        Alignment quality score
     rotation_matrix : np.ndarray
         3x3 rotation matrix
     """
@@ -168,88 +152,87 @@ def align_volume_based(
     best_rotation = np.eye(3)
     best_score = -np.inf
     
-    # Coarse search - sample rotation space
-    angles_coarse = np.linspace(0, 2*np.pi, n_angles_coarse, endpoint=False)
+    # Coarse search
+    angles_coarse = np.arange(0, 360, angular_step)
     
-    for rx in angles_coarse[::2]:  # Sample every other angle for speed
-        for ry in angles_coarse[::2]:
-            for rz in angles_coarse[::2]:
-                # Build rotation matrix from Euler angles
+    for rx in angles_coarse[::3]:  # Sample every 3rd angle for speed
+        for ry in angles_coarse[::3]:
+            for rz in angles_coarse[::3]:
+                # Create rotation matrix
+                rx_rad, ry_rad, rz_rad = np.radians([rx, ry, rz])
+                
+                # Rotation matrices
                 Rx = np.array([[1, 0, 0],
-                              [0, np.cos(rx), -np.sin(rx)],
-                              [0, np.sin(rx), np.cos(rx)]])
+                              [0, np.cos(rx_rad), -np.sin(rx_rad)],
+                              [0, np.sin(rx_rad), np.cos(rx_rad)]])
                 
-                Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
+                Ry = np.array([[np.cos(ry_rad), 0, np.sin(ry_rad)],
                               [0, 1, 0],
-                              [-np.sin(ry), 0, np.cos(ry)]])
+                              [-np.sin(ry_rad), 0, np.cos(ry_rad)]])
                 
-                Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
-                              [np.sin(rz), np.cos(rz), 0],
+                Rz = np.array([[np.cos(rz_rad), -np.sin(rz_rad), 0],
+                              [np.sin(rz_rad), np.cos(rz_rad), 0],
                               [0, 0, 1]])
                 
-                R_mat = Rz @ Ry @ Rx
+                R = Rz @ Ry @ Rx
                 
-                # Apply rotation and compute score
-                rotated = apply_rotation_to_volume(target, R_mat)
-                score = cross_correlation_score(template_norm, rotated)
+                # Apply rotation and compute correlation
+                rotated = apply_rotation_to_volume(target, R)
+                score = cross_correlation_3d(template_norm, rotated)
                 
                 if score > best_score:
                     best_score = score
-                    best_rotation = R_mat
+                    best_rotation = R
     
-    # Fine refinement around best rotation
-    if refine:
-        # Extract approximate Euler angles from best rotation
-        r = R.from_matrix(best_rotation)
-        best_euler = r.as_euler('xyz')
+    # Fine search around best rotation
+    if angular_step > 5:
+        # Extract approximate angles from best rotation
+        best_ry = np.arcsin(-best_rotation[2, 0])
+        best_rx = np.arctan2(best_rotation[2, 1], best_rotation[2, 2])
+        best_rz = np.arctan2(best_rotation[1, 0], best_rotation[0, 0])
         
-        # Search in a narrow range around the best angles
-        angle_range = 2*np.pi / n_angles_coarse
-        angles_fine = np.linspace(-angle_range, angle_range, n_angles_fine)
+        angles_fine = np.linspace(-angular_step/2, angular_step/2, 5)
         
         for drx in angles_fine:
             for dry in angles_fine:
                 for drz in angles_fine:
-                    rx = best_euler[0] + drx
-                    ry = best_euler[1] + dry
-                    rz = best_euler[2] + drz
+                    rx_rad = best_rx + np.radians(drx)
+                    ry_rad = best_ry + np.radians(dry)
+                    rz_rad = best_rz + np.radians(drz)
                     
                     Rx = np.array([[1, 0, 0],
-                                  [0, np.cos(rx), -np.sin(rx)],
-                                  [0, np.sin(rx), np.cos(rx)]])
+                                  [0, np.cos(rx_rad), -np.sin(rx_rad)],
+                                  [0, np.sin(rx_rad), np.cos(rx_rad)]])
                     
-                    Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
+                    Ry = np.array([[np.cos(ry_rad), 0, np.sin(ry_rad)],
                                   [0, 1, 0],
-                                  [-np.sin(ry), 0, np.cos(ry)]])
+                                  [-np.sin(ry_rad), 0, np.cos(ry_rad)]])
                     
-                    Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
-                                  [np.sin(rz), np.cos(rz), 0],
+                    Rz = np.array([[np.cos(rz_rad), -np.sin(rz_rad), 0],
+                                  [np.sin(rz_rad), np.cos(rz_rad), 0],
                                   [0, 0, 1]])
                     
-                    R_mat = Rz @ Ry @ Rx
+                    R = Rz @ Ry @ Rx
                     
-                    rotated = apply_rotation_to_volume(target, R_mat)
-                    score = cross_correlation_score(template_norm, rotated)
+                    rotated = apply_rotation_to_volume(target, R)
+                    score = cross_correlation_3d(template_norm, rotated)
                     
                     if score > best_score:
                         best_score = score
-                        best_rotation = R_mat
+                        best_rotation = R
     
     aligned = apply_rotation_to_volume(target, best_rotation)
     return aligned, best_score, best_rotation
 
 
-def align_icp_based(
+def align_fourier(
     template: np.ndarray,
     target: np.ndarray,
-    template_splats: Dict[str, np.ndarray],
-    target_splats: Dict[str, np.ndarray],
-    n_iterations: int = 50,
-    n_init_attempts: int = 5,
-    convergence_threshold: float = 1e-6
+    angular_step: float = 15.0
 ) -> Tuple[np.ndarray, float, np.ndarray]:
     """
-    ICP-based alignment using Gaussian splat centroids.
+    Find best rotation using Fourier-based phase correlation.
+    This is faster but less accurate than cross-correlation.
     
     Parameters
     ----------
@@ -257,264 +240,8 @@ def align_icp_based(
         Template volume
     target : np.ndarray
         Target volume to align
-    template_splats : Dict[str, np.ndarray]
-        Template splat parameters with keys 'centroids', 'weights', 'sigmas'
-    target_splats : Dict[str, np.ndarray]
-        Target splat parameters with keys 'centroids', 'weights', 'sigmas'
-    n_iterations : int
-        Number of ICP iterations
-    n_init_attempts : int
-        Number of random initializations
-    convergence_threshold : float
-        Convergence threshold for early stopping
-        
-    Returns
-    -------
-    aligned_volume : np.ndarray
-        Aligned target volume
-    score : float
-        Alignment quality score (cross-correlation)
-    rotation_matrix : np.ndarray
-        3x3 rotation matrix
-    """
-    # Import the existing ICP alignment from alignment.py
-    from .alignment import align_gaussian_splats_icp
-    
-    # Create splat tuples
-    template_tuple = (template_splats['centroids'], template_splats['sigmas'], template_splats['weights'])
-    target_tuple = (target_splats['centroids'], target_splats['sigmas'], target_splats['weights'])
-    
-    # Perform ICP alignment
-    rotation_matrix, alignment_error = align_gaussian_splats_icp(
-        template_tuple, target_tuple,
-        n_iterations=n_iterations,
-        n_init_attempts=n_init_attempts,
-        convergence_threshold=convergence_threshold
-    )
-    
-    # Apply rotation to volume
-    aligned = apply_rotation_to_volume(target, rotation_matrix)
-    
-    # Compute cross-correlation for consistency
-    score = cross_correlation_score(template, aligned)
-    
-    return aligned, score, rotation_matrix
-
-
-def align_ransac_icp(
-    template: np.ndarray,
-    target: np.ndarray,
-    template_splats: Dict[str, np.ndarray],
-    target_splats: Dict[str, np.ndarray],
-    weight_percentile: float = 25.0,
-    sphere_radius: float = 15.0,
-    ransac_iterations: int = 100,
-    ransac_inlier_threshold: float = 2.0,
-    icp_iterations: int = 10,
-    icp_threshold: float = 2.0,
-    min_samples: int = 3,
-    box_size: int = 48,
-    volume_center: Optional[np.ndarray] = None
-) -> Tuple[np.ndarray, float, np.ndarray]:
-    """
-    RANSAC + ICP alignment using Gaussian splats with filtering.
-    
-    This is the method from cryolens-scripts/a_id_validation/ransac_icp_alignment_splats.py
-    
-    Parameters
-    ----------
-    template : np.ndarray
-        Template volume
-    target : np.ndarray
-        Target volume to align
-    template_splats : Dict[str, np.ndarray]
-        Template splat parameters with keys 'centroids', 'weights', 'sigmas'
-    target_splats : Dict[str, np.ndarray]
-        Target splat parameters with keys 'centroids', 'weights', 'sigmas'
-    weight_percentile : float
-        Percentile threshold for weight filtering (25 = keep splats above 25th percentile)
-    sphere_radius : float
-        Radius of sphere from center for spatial filtering
-    ransac_iterations : int
-        Number of RANSAC iterations
-    ransac_inlier_threshold : float
-        Distance threshold for RANSAC inliers
-    icp_iterations : int
-        Number of ICP refinement iterations
-    icp_threshold : float
-        Distance threshold for ICP correspondences
-    min_samples : int
-        Minimum number of samples needed for alignment
-    box_size : int
-        Size of the volume box
-    volume_center : np.ndarray, optional
-        Center of the volume (defaults to [box_size/2, box_size/2, box_size/2])
-        
-    Returns
-    -------
-    aligned_volume : np.ndarray
-        Aligned target volume
-    score : float
-        Alignment quality score (cross-correlation)
-    rotation_matrix : np.ndarray
-        3x3 rotation matrix
-    """
-    if volume_center is None:
-        volume_center = np.array([box_size / 2, box_size / 2, box_size / 2])
-    
-    def apply_filters(splat_dict: Dict[str, np.ndarray]) -> np.ndarray:
-        """Apply weight and sphere filters to splats."""
-        weights = splat_dict['weights']
-        coords = splat_dict['centroids']
-        
-        # Weight filtering - keep splats above percentile threshold
-        threshold = np.percentile(weights, weight_percentile)
-        weight_mask = weights > threshold
-        
-        # Sphere filtering - keep splats within radius from center
-        distances = np.linalg.norm(coords - volume_center, axis=1)
-        sphere_mask = distances < sphere_radius
-        
-        # Combine both filters
-        return weight_mask & sphere_mask
-    
-    # Filter splats
-    template_mask = apply_filters(template_splats)
-    target_mask = apply_filters(target_splats)
-    
-    template_coords = template_splats['centroids'][template_mask]
-    template_weights = template_splats['weights'][template_mask]
-    target_coords = target_splats['centroids'][target_mask]
-    target_weights = target_splats['weights'][target_mask]
-    
-    if len(target_coords) < min_samples or len(template_coords) < min_samples:
-        logger.warning(f"Not enough splats after filtering (template: {len(template_coords)}, "
-                      f"target: {len(target_coords)}), returning identity")
-        return target, cross_correlation_score(template, target), np.eye(3)
-    
-    # RANSAC alignment
-    best_R = np.eye(3)
-    best_score = float('inf')
-    best_inliers = 0
-    
-    # Normalize weights for probability sampling
-    template_probs = template_weights / template_weights.sum() if template_weights.sum() > 0 else None
-    target_probs = target_weights / target_weights.sum() if target_weights.sum() > 0 else None
-    
-    for iteration in range(ransac_iterations):
-        # Sample points weighted by splat weights
-        n_sample = min(30, len(target_coords)//3, len(template_coords)//3)
-        n_sample = max(min_samples, n_sample)
-        
-        try:
-            if target_probs is not None and template_probs is not None:
-                target_idx = np.random.choice(len(target_coords), n_sample, p=target_probs, replace=False)
-                template_idx = np.random.choice(len(template_coords), n_sample, p=template_probs, replace=False)
-            else:
-                target_idx = np.random.choice(len(target_coords), n_sample, replace=False)
-                template_idx = np.random.choice(len(template_coords), n_sample, replace=False)
-        except:
-            continue
-        
-        # Center points around volume center
-        target_sample = target_coords[target_idx] - volume_center
-        template_sample = template_coords[template_idx] - volume_center
-        
-        # Compute rotation using SVD
-        H = target_sample.T @ template_sample
-        U, S, Vt = np.linalg.svd(H)
-        R_candidate = Vt.T @ U.T
-        
-        # Ensure proper rotation (det = 1)
-        if np.linalg.det(R_candidate) < 0:
-            Vt[-1, :] *= -1
-            R_candidate = Vt.T @ U.T
-        
-        # Apply rotation to all target points
-        target_rot = (R_candidate @ (target_coords - volume_center).T).T + volume_center
-        
-        # Count inliers
-        distances = cdist(target_rot, template_coords)
-        min_dists = np.min(distances, axis=1)
-        inliers = min_dists < ransac_inlier_threshold
-        n_inliers = np.sum(inliers)
-        
-        # Score by weighted inlier distance
-        if n_inliers > 0:
-            inlier_weights = target_weights[inliers]
-            if inlier_weights.sum() > 0:
-                score = np.average(min_dists[inliers], weights=inlier_weights)
-            else:
-                score = np.mean(min_dists[inliers])
-            
-            if n_inliers > best_inliers or (n_inliers == best_inliers and score < best_score):
-                best_R = R_candidate
-                best_score = score
-                best_inliers = n_inliers
-    
-    # ICP refinement
-    R = best_R.copy()
-    prev_error = float('inf')
-    
-    for icp_iter in range(icp_iterations):
-        # Apply current rotation
-        target_rot = (R @ (target_coords - volume_center).T).T + volume_center
-        
-        # Find nearest neighbors
-        distances = cdist(target_rot, template_coords)
-        nearest_idx = np.argmin(distances, axis=1)
-        min_dists = np.min(distances, axis=1)
-        
-        # Only use close correspondences
-        valid = min_dists < icp_threshold
-        if np.sum(valid) < min_samples:
-            break
-        
-        target_valid = target_rot[valid] - volume_center
-        template_matched = template_coords[nearest_idx[valid]] - volume_center
-        
-        # Update rotation
-        H = target_valid.T @ template_matched
-        U, S, Vt = np.linalg.svd(H)
-        R_update = Vt.T @ U.T
-        
-        if np.linalg.det(R_update) < 0:
-            Vt[-1, :] *= -1
-            R_update = Vt.T @ U.T
-        
-        # Accumulate rotation
-        R = R_update @ R
-        
-        # Check convergence
-        current_error = np.mean(min_dists[valid])
-        if abs(prev_error - current_error) < 1e-6:
-            break
-        prev_error = current_error
-    
-    # Apply final rotation to volume
-    aligned = apply_rotation_to_volume(target, R)
-    score = cross_correlation_score(template, aligned)
-    
-    return aligned, score, R
-
-
-def align_fourier_based(
-    template: np.ndarray,
-    target: np.ndarray,
-    n_angles: int = 18
-) -> Tuple[np.ndarray, float, np.ndarray]:
-    """
-    Fourier-based phase correlation alignment.
-    Fast but less accurate than cross-correlation.
-    
-    Parameters
-    ----------
-    template : np.ndarray
-        Template volume
-    target : np.ndarray
-        Target volume to align
-    n_angles : int
-        Number of angles to sample in rotation search
+    angular_step : float
+        Angular step for search in degrees
         
     Returns
     -------
@@ -525,38 +252,41 @@ def align_fourier_based(
     rotation_matrix : np.ndarray
         3x3 rotation matrix
     """
+    # Normalize volumes
     template_norm = normalize_volume(template)
     target_norm = normalize_volume(target)
     
     best_rotation = np.eye(3)
     best_score = -np.inf
     
-    # Sample rotation space
-    angles = np.linspace(0, 2*np.pi, n_angles, endpoint=False)
+    # Use coarser sampling for Fourier method (it's faster per iteration)
+    angles = np.arange(0, 360, angular_step)
     
     # Pre-compute template FFT
     template_fft = fftn(template_norm)
     
-    for rx in angles:
-        for ry in angles:
-            for rz in angles:
-                # Build rotation matrix
+    for rx in angles[::2]:
+        for ry in angles[::2]:
+            for rz in angles[::2]:
+                # Create rotation matrix
+                rx_rad, ry_rad, rz_rad = np.radians([rx, ry, rz])
+                
                 Rx = np.array([[1, 0, 0],
-                              [0, np.cos(rx), -np.sin(rx)],
-                              [0, np.sin(rx), np.cos(rx)]])
+                              [0, np.cos(rx_rad), -np.sin(rx_rad)],
+                              [0, np.sin(rx_rad), np.cos(rx_rad)]])
                 
-                Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
+                Ry = np.array([[np.cos(ry_rad), 0, np.sin(ry_rad)],
                               [0, 1, 0],
-                              [-np.sin(ry), 0, np.cos(ry)]])
+                              [-np.sin(ry_rad), 0, np.cos(ry_rad)]])
                 
-                Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
-                              [np.sin(rz), np.cos(rz), 0],
+                Rz = np.array([[np.cos(rz_rad), -np.sin(rz_rad), 0],
+                              [np.sin(rz_rad), np.cos(rz_rad), 0],
                               [0, 0, 1]])
                 
-                R_mat = Rz @ Ry @ Rx
+                R = Rz @ Ry @ Rx
                 
                 # Apply rotation
-                rotated = apply_rotation_to_volume(target_norm, R_mat)
+                rotated = apply_rotation_to_volume(target_norm, R)
                 
                 # Compute phase correlation
                 rotated_fft = fftn(rotated)
@@ -568,25 +298,25 @@ def align_fourier_based(
                 
                 if score > best_score:
                     best_score = score
-                    best_rotation = R_mat
+                    best_rotation = R
     
     aligned = apply_rotation_to_volume(target, best_rotation)
     # Recompute cross-correlation for consistency with other methods
-    final_score = cross_correlation_score(template, aligned)
+    final_score = cross_correlation_3d(template, aligned)
     
     return aligned, final_score, best_rotation
 
 
-def align_gradient_based(
+def align_gradient_descent(
     template: np.ndarray,
     target: np.ndarray,
     max_iter: int = 50,
-    method: str = 'Powell',
-    initial_alignment_method: str = 'volume'
+    initial_method: str = 'cross_correlation',
+    initial_rotation: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, float, np.ndarray]:
     """
-    Gradient descent refinement of alignment.
-    Most accurate for volumes but slowest. Best used with initial estimate.
+    Refine rotation using gradient descent optimization.
+    Good for fine-tuning an initial estimate.
     
     Parameters
     ----------
@@ -596,10 +326,10 @@ def align_gradient_based(
         Target volume to align
     max_iter : int
         Maximum iterations for optimization
-    method : str
-        Optimization method for scipy.optimize.minimize ('Powell', 'BFGS', etc.)
-    initial_alignment_method : str
-        Method to use for initial estimate ('volume', 'fourier', or None for identity)
+    initial_method : str
+        Method to use for initial estimate ('cross_correlation')
+    initial_rotation : np.ndarray, optional
+        Initial rotation matrix (if None, computed using initial_method)
         
     Returns
     -------
@@ -612,16 +342,14 @@ def align_gradient_based(
     """
     template_norm = normalize_volume(template)
     
-    # Get initial rotation
-    if initial_alignment_method == 'volume':
-        _, _, initial_rotation = align_volume_based(template, target, n_angles_coarse=12, refine=False)
-    elif initial_alignment_method == 'fourier':
-        _, _, initial_rotation = align_fourier_based(template, target, n_angles=12)
-    else:
-        initial_rotation = np.eye(3)
+    # Get initial rotation if not provided
+    if initial_rotation is None:
+        if initial_method == 'cross_correlation':
+            _, _, initial_rotation = align_cross_correlation(template, target, angular_step=30.0)
+        else:
+            initial_rotation = np.eye(3)
     
     def objective(angles):
-        """Objective function to minimize (negative correlation)."""
         rx, ry, rz = angles
         
         Rx = np.array([[1, 0, 0],
@@ -636,18 +364,20 @@ def align_gradient_based(
                       [np.sin(rz), np.cos(rz), 0],
                       [0, 0, 1]])
         
-        R_mat = Rz @ Ry @ Rx
-        rotated = apply_rotation_to_volume(target, R_mat)
+        R = Rz @ Ry @ Rx
+        rotated = apply_rotation_to_volume(target, R)
         
-        # Return negative correlation (we're minimizing)
-        return -cross_correlation_score(template_norm, rotated)
+        # Return negative correlation (we minimize)
+        return -cross_correlation_3d(template_norm, rotated)
     
-    # Extract Euler angles from initial rotation
-    r = R.from_matrix(initial_rotation)
-    initial_angles = r.as_euler('xyz')
+    # Extract angles from initial rotation (approximate)
+    ry = np.arcsin(-initial_rotation[2, 0])
+    rx = np.arctan2(initial_rotation[2, 1], initial_rotation[2, 2])
+    rz = np.arctan2(initial_rotation[1, 0], initial_rotation[0, 0])
+    initial_angles = [rx, ry, rz]
     
     # Optimize
-    result = minimize(objective, initial_angles, method=method, 
+    result = minimize(objective, initial_angles, method='Powell', 
                      options={'maxiter': max_iter})
     
     # Get final rotation
@@ -672,11 +402,216 @@ def align_gradient_based(
     return aligned, best_score, best_rotation
 
 
+def align_ransac_icp(
+    template: np.ndarray,
+    target: np.ndarray,
+    template_splats: Dict[str, np.ndarray],
+    target_splats: Dict[str, np.ndarray],
+    weight_percentile: float = 48.3,
+    sphere_radius: float = 15.2,
+    ransac_iterations: int = 252,
+    ransac_inlier_threshold: float = 1.63,
+    icp_iterations: int = 17,
+    icp_threshold: float = 3.19,
+    min_samples: int = 10,
+    max_samples: int = 36,
+    use_adaptive_threshold: bool = True,
+    adaptive_threshold_percentile: float = 82,
+    outlier_rejection_percentile: float = 99.6,
+    icp_convergence_threshold: float = 0.000153,
+    box_size: int = 48,
+    volume_center: Optional[np.ndarray] = None
+) -> Tuple[np.ndarray, float, np.ndarray]:
+    """
+    RANSAC + ICP alignment using Gaussian splats.
+    Uses optimized parameters from Optuna tuning.
+    
+    Parameters
+    ----------
+    template : np.ndarray
+        Template volume
+    target : np.ndarray
+        Target volume to align
+    template_splats : Dict[str, np.ndarray]
+        Template splat parameters with keys 'coordinates', 'weights', 'sigmas'
+    target_splats : Dict[str, np.ndarray]
+        Target splat parameters with keys 'coordinates', 'weights', 'sigmas'
+    weight_percentile : float
+        Percentile threshold for weight filtering
+    sphere_radius : float
+        Radius of sphere from center for filtering
+    ransac_iterations : int
+        Number of RANSAC iterations
+    ransac_inlier_threshold : float
+        Inlier threshold for RANSAC
+    icp_iterations : int
+        Number of ICP refinement iterations
+    icp_threshold : float
+        Distance threshold for ICP
+    min_samples : int
+        Minimum number of samples for alignment
+    max_samples : int
+        Maximum number of samples to use
+    use_adaptive_threshold : bool
+        Whether to use adaptive thresholding
+    adaptive_threshold_percentile : float
+        Percentile for adaptive threshold
+    outlier_rejection_percentile : float
+        Percentile for outlier rejection
+    icp_convergence_threshold : float
+        Convergence threshold for ICP
+    box_size : int
+        Size of the volume box
+    volume_center : np.ndarray, optional
+        Center of the volume (defaults to box_size/2)
+        
+    Returns
+    -------
+    aligned_volume : np.ndarray
+        Aligned target volume
+    score : float
+        Alignment quality score (cross-correlation)
+    rotation_matrix : np.ndarray
+        3x3 rotation matrix
+    """
+    if volume_center is None:
+        volume_center = np.array([box_size / 2, box_size / 2, box_size / 2])
+    
+    def apply_filters(splat_dict):
+        """Apply weight and sphere filters to splats."""
+        weights = splat_dict['weights']
+        coords = splat_dict['coordinates']
+        
+        # Weight filtering
+        threshold = np.percentile(weights, weight_percentile)
+        weight_mask = weights > threshold
+        
+        # Sphere filtering
+        distances = np.linalg.norm(coords - volume_center, axis=1)
+        sphere_mask = distances < sphere_radius
+        
+        # Outlier rejection
+        outlier_threshold = np.percentile(weights, outlier_rejection_percentile)
+        outlier_mask = weights <= outlier_threshold
+        
+        return weight_mask & sphere_mask & outlier_mask
+    
+    # Filter splats
+    template_mask = apply_filters(template_splats)
+    target_mask = apply_filters(target_splats)
+    
+    template_coords = template_splats['coordinates'][template_mask]
+    template_weights = template_splats['weights'][template_mask]
+    target_coords = target_splats['coordinates'][target_mask]
+    target_weights = target_splats['weights'][target_mask]
+    
+    if len(target_coords) < min_samples or len(template_coords) < min_samples:
+        logger.warning("Not enough splats after filtering, returning identity")
+        return target, cross_correlation_3d(template, target), np.eye(3)
+    
+    # RANSAC
+    best_R = np.eye(3)
+    best_score = float('inf')
+    
+    # Adaptive threshold calculation
+    if use_adaptive_threshold and len(target_coords) > 10:
+        dists = cdist(target_coords[:10], target_coords[:10])
+        np.fill_diagonal(dists, np.inf)
+        nn_dist = np.min(dists, axis=1).mean()
+        adaptive_threshold = max(ransac_inlier_threshold, nn_dist * 2)
+    else:
+        adaptive_threshold = ransac_inlier_threshold
+    
+    for iteration in range(ransac_iterations):
+        # Sample
+        n_sample = min(max_samples, max(min_samples, len(target_coords)//3, len(template_coords)//3))
+        
+        try:
+            idx1 = np.random.choice(len(target_coords), n_sample, replace=False)
+            idx2 = np.random.choice(len(template_coords), n_sample, replace=False)
+            
+            source = target_coords[idx1] - volume_center
+            target_pts = template_coords[idx2] - volume_center
+            
+            H = source.T @ target_pts
+            U, S, Vt = np.linalg.svd(H)
+            R = Vt.T @ U.T
+            
+            if np.linalg.det(R) < 0:
+                Vt[-1, :] *= -1
+                R = Vt.T @ U.T
+            
+            # Apply rotation and compute score
+            rotated = (R @ (target_coords - volume_center).T).T + volume_center
+            
+            distances = cdist(rotated, template_coords)
+            min_dists = np.min(distances, axis=1)
+            
+            inliers = min_dists < adaptive_threshold
+            n_inliers = np.sum(inliers)
+            
+            if n_inliers > 0:
+                score = np.mean(min_dists[inliers])
+                combined_score = score / (n_inliers + 1)
+                
+                if combined_score < best_score:
+                    best_score = combined_score
+                    best_R = R
+        except:
+            continue
+    
+    # ICP refinement
+    R = best_R.copy()
+    prev_error = float('inf')
+    
+    for icp_iter in range(icp_iterations):
+        source_rot = (R @ (target_coords - volume_center).T).T + volume_center
+        
+        distances = cdist(source_rot, template_coords)
+        nearest_idx = np.argmin(distances, axis=1)
+        min_dists = np.min(distances, axis=1)
+        
+        # Adaptive threshold for ICP
+        if use_adaptive_threshold:
+            threshold = np.percentile(min_dists, adaptive_threshold_percentile)
+            threshold = min(threshold, icp_threshold)
+        else:
+            threshold = icp_threshold
+        
+        valid = min_dists < threshold
+        if np.sum(valid) < min_samples:
+            break
+        
+        source_valid = source_rot[valid] - volume_center
+        target_matched = template_coords[nearest_idx[valid]] - volume_center
+        
+        H = source_valid.T @ target_matched
+        U, S, Vt = np.linalg.svd(H)
+        R_update = Vt.T @ U.T
+        
+        if np.linalg.det(R_update) < 0:
+            Vt[-1, :] *= -1
+            R_update = Vt.T @ U.T
+        
+        R = R_update @ R
+        
+        current_error = np.mean(min_dists[valid])
+        if abs(prev_error - current_error) < icp_convergence_threshold:
+            break
+        prev_error = current_error
+    
+    # Apply final rotation to volume
+    aligned = apply_rotation_to_volume(target, R)
+    score = cross_correlation_3d(template, aligned)
+    
+    return aligned, score, R
+
+
 def align_volumes(
     template: np.ndarray,
     target: np.ndarray,
-    method: str = 'volume',
-    splat_params: Optional[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]] = None,
+    method: str = 'cross_correlation',
+    splat_params: Optional[Tuple[Dict, Dict]] = None,
     **method_kwargs
 ) -> Tuple[np.ndarray, float, np.ndarray]:
     """
@@ -689,10 +624,10 @@ def align_volumes(
     target : np.ndarray
         Target volume to align
     method : str
-        Alignment method: 'volume', 'icp', 'ransac_icp', 'fourier', 'gradient'
+        Alignment method: 'cross_correlation', 'fourier', 'gradient_descent', 'ransac_icp'
     splat_params : Tuple[Dict, Dict], optional
-        Tuple of (template_splats, target_splats) for splat-based methods.
-        Each dict should have keys: 'centroids', 'weights', 'sigmas'
+        Tuple of (template_splats, target_splats) for splat-based methods
+        Each dict should have keys: 'coordinates', 'weights', 'sigmas'
     **method_kwargs
         Additional method-specific parameters
         
@@ -709,114 +644,27 @@ def align_volumes(
     ------
     ValueError
         If method is unknown or required parameters are missing
-        
-    Examples
-    --------
-    >>> # Volume-based alignment (default)
-    >>> aligned, score, R = align_volumes(template, target)
-    
-    >>> # RANSAC+ICP with custom parameters
-    >>> aligned, score, R = align_volumes(
-    ...     template, target, 
-    ...     method='ransac_icp',
-    ...     splat_params=(template_splats, target_splats),
-    ...     weight_percentile=25,
-    ...     sphere_radius=15
-    ... )
-    
-    >>> # Gradient descent with Fourier initialization
-    >>> aligned, score, R = align_volumes(
-    ...     template, target,
-    ...     method='gradient',
-    ...     initial_alignment_method='fourier'
-    ... )
     """
-    # Get default config for this method and update with user parameters
+    # Get default config for this method
     config = DEFAULT_CONFIGS.get(method, {}).copy()
+    # Update with user-provided parameters
     config.update(method_kwargs)
     
-    # Validate splat-based methods have splat params
-    splat_methods = ['icp', 'ransac_icp']
-    if method in splat_methods and splat_params is None:
-        raise ValueError(f"{method} method requires splat_params (template_splats, target_splats)")
+    if method == 'cross_correlation':
+        return align_cross_correlation(template, target, **config)
     
-    # Route to appropriate alignment function
-    if method == 'volume':
-        return align_volume_based(template, target, **config)
+    elif method == 'fourier':
+        return align_fourier(template, target, **config)
     
-    elif method == 'icp':
-        template_splats, target_splats = splat_params
-        return align_icp_based(template, target, template_splats, target_splats, **config)
+    elif method == 'gradient_descent':
+        return align_gradient_descent(template, target, **config)
     
     elif method == 'ransac_icp':
+        if splat_params is None:
+            raise ValueError("ransac_icp method requires splat_params (template_splats, target_splats)")
         template_splats, target_splats = splat_params
         return align_ransac_icp(template, target, template_splats, target_splats, **config)
     
-    elif method == 'fourier':
-        return align_fourier_based(template, target, **config)
-    
-    elif method == 'gradient':
-        return align_gradient_based(template, target, **config)
-    
     else:
-        available = list(DEFAULT_CONFIGS.keys())
-        raise ValueError(f"Unknown alignment method: {method}. Available methods: {available}")
-
-
-def align_multiple_volumes(
-    template: np.ndarray,
-    targets: List[np.ndarray],
-    method: str = 'volume',
-    splat_params_list: Optional[List[Tuple[Dict, Dict]]] = None,
-    **method_kwargs
-) -> Tuple[List[np.ndarray], List[float], List[np.ndarray]]:
-    """
-    Align multiple target volumes to a single template.
-    
-    Parameters
-    ----------
-    template : np.ndarray
-        Template volume to align all targets to
-    targets : List[np.ndarray]
-        List of target volumes to align
-    method : str
-        Alignment method to use
-    splat_params_list : List[Tuple[Dict, Dict]], optional
-        List of (template_splats, target_splats) tuples for each target.
-        Required for splat-based methods.
-    **method_kwargs
-        Additional method-specific parameters
-        
-    Returns
-    -------
-    aligned_volumes : List[np.ndarray]
-        List of aligned target volumes
-    scores : List[float]
-        List of alignment scores
-    rotation_matrices : List[np.ndarray]
-        List of rotation matrices
-    """
-    aligned_volumes = []
-    scores = []
-    rotation_matrices = []
-    
-    for i, target in enumerate(targets):
-        # Get splat params for this target if provided
-        if splat_params_list is not None:
-            splat_params = splat_params_list[i]
-        else:
-            splat_params = None
-        
-        # Align this target
-        aligned, score, R = align_volumes(
-            template, target,
-            method=method,
-            splat_params=splat_params,
-            **method_kwargs
-        )
-        
-        aligned_volumes.append(aligned)
-        scores.append(score)
-        rotation_matrices.append(R)
-    
-    return aligned_volumes, scores, rotation_matrices
+        raise ValueError(f"Unknown alignment method: {method}. "
+                        f"Available methods: cross_correlation, fourier, gradient_descent, ransac_icp")
