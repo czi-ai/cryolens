@@ -18,6 +18,11 @@ from .align_and_average import (
     align_and_average_volumes,
     align_to_ground_truth_poses
 )
+from .alignment_methods import (
+    align_volumes,
+    align_multiple_volumes,
+    DEFAULT_CONFIGS
+)
 
 __all__ = [
     'extract_gaussian_splats',
@@ -29,5 +34,8 @@ __all__ = [
     'create_aligned_average',
     'compute_alignment_statistics',
     'align_and_average_volumes',
-    'align_to_ground_truth_poses'
+    'align_to_ground_truth_poses',
+    'align_volumes',
+    'align_multiple_volumes',
+    'DEFAULT_CONFIGS'
 ]
