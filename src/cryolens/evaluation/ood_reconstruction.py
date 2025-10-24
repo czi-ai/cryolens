@@ -19,7 +19,7 @@ import torch
 import h5py
 import mrcfile
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 from tqdm import tqdm
 from scipy import ndimage
 from scipy.fft import fftn, ifftn, fftshift
@@ -236,8 +236,9 @@ def generate_resampled_reconstructions(
     device: torch.device,
     n_samples: int = 10,
     noise_level: float = 0.05,
-    target_shape: Tuple[int, int, int] = (48, 48, 48)
-) -> List[np.ndarray]:
+    target_shape: Tuple[int, int, int] = (48, 48, 48),
+    return_splat_params: bool = False
+) -> Union[List[np.ndarray], Tuple[List[np.ndarray], List[Dict[str, np.ndarray]]]]:
     """
     Generate multiple reconstructions for uncertainty estimation.
     
@@ -262,14 +263,25 @@ def generate_resampled_reconstructions(
         Noise standard deviation (as fraction of particle std)
     target_shape : Tuple[int, int, int]
         Output shape
+    return_splat_params : bool
+        If True, also return splat parameters for each reconstruction
         
     Returns
     -------
-    List[np.ndarray]
+    reconstructions : List[np.ndarray]
         List of reconstructed volumes
+    splat_params_list : List[Dict[str, np.ndarray]] (optional)
+        If return_splat_params=True, list of splat parameter dicts with keys:
+        - 'centroids': (N, 3) array
+        - 'weights': (N,) array
+        - 'sigmas': (N, 3, 3) array
     """
     reconstructions = []
+    splat_params_list = [] if return_splat_params else None
     decoder = model.decoder
+    
+    # Check if decoder supports splat extraction
+    has_splats = hasattr(decoder, 'affinity_segment_size')
     
     for i in range(n_samples):
         # Add noise to input (except first sample)
@@ -317,8 +329,37 @@ def generate_resampled_reconstructions(
         reconstruction_np = -reconstruction_np
         
         reconstructions.append(reconstruction_np)
+        
+        # Extract splat parameters if requested
+        if return_splat_params:
+            if has_splats:
+                # Extract splat parameters from decoder
+                with torch.no_grad():
+                    # Get splat outputs from decoder
+                    splat_outputs = decoder.decode_splats(mu_tensor, pose, global_weight)
+                    
+                    # Extract centroids, weights, sigmas
+                    centroids = splat_outputs['centroids'].cpu().numpy()[0]  # (N, 3)
+                    weights = splat_outputs['weights'].cpu().numpy()[0]      # (N,)
+                    sigmas = splat_outputs['sigmas'].cpu().numpy()[0]        # (N, 3, 3)
+                    
+                    # Transform centroids from [-1, 1] to voxel coordinates [0, box_size]
+                    box_size = target_shape[0]
+                    centroids = (centroids + 1.0) * (box_size / 2.0)
+                    
+                    splat_params_list.append({
+                        'centroids': centroids,
+                        'weights': weights,
+                        'sigmas': sigmas
+                    })
+            else:
+                # Decoder doesn't support splats, append None
+                splat_params_list.append(None)
     
-    return reconstructions
+    if return_splat_params:
+        return reconstructions, splat_params_list
+    else:
+        return reconstructions
 
 
 def evaluate_ood_structure(
