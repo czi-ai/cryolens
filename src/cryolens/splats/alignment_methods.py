@@ -6,7 +6,6 @@ volumes, including both volume-based and splat-based approaches.
 
 Available methods:
 - volume: Volume-based cross-correlation alignment with coarse-to-fine search (default)
-- pca: PCA-based splat alignment (requires splats)
 - icp: ICP splat alignment (requires splats)
 - ransac_icp: RANSAC+ICP on Gaussian splats with filtering (requires splats)
 - fourier: Fourier-based phase correlation (fast but less accurate)
@@ -31,9 +30,6 @@ DEFAULT_CONFIGS = {
         'n_angles_coarse': 24,
         'n_angles_fine': 36,
         'refine': True
-    },
-    'pca': {
-        'use_weights': True
     },
     'icp': {
         'n_iterations': 50,
@@ -241,64 +237,6 @@ def align_volume_based(
     
     aligned = apply_rotation_to_volume(target, best_rotation)
     return aligned, best_score, best_rotation
-
-
-def align_pca_based(
-    template: np.ndarray,
-    target: np.ndarray,
-    template_splats: Dict[str, np.ndarray],
-    target_splats: Dict[str, np.ndarray],
-    use_weights: bool = True
-) -> Tuple[np.ndarray, float, np.ndarray]:
-    """
-    PCA-based alignment using Gaussian splat centroids.
-    
-    Parameters
-    ----------
-    template : np.ndarray
-        Template volume
-    target : np.ndarray
-        Target volume to align
-    template_splats : Dict[str, np.ndarray]
-        Template splat parameters with keys 'centroids', 'weights', 'sigmas'
-    target_splats : Dict[str, np.ndarray]
-        Target splat parameters with keys 'centroids', 'weights', 'sigmas'
-    use_weights : bool
-        Whether to use splat weights in PCA computation
-        
-    Returns
-    -------
-    aligned_volume : np.ndarray
-        Aligned target volume
-    score : float
-        Alignment quality score (cross-correlation)
-    rotation_matrix : np.ndarray
-        3x3 rotation matrix
-    """
-    # Import the existing PCA alignment from alignment.py
-    from .alignment_pca import weighted_pca_alignment
-    
-    # Extract centroids and weights
-    template_centroids = template_splats['centroids']
-    template_weights = template_splats['weights']
-    target_centroids = target_splats['centroids']
-    target_weights = target_splats['weights']
-    
-    # Perform weighted PCA alignment
-    template_tuple = (template_centroids, template_splats['sigmas'], template_weights)
-    target_tuple = (target_centroids, target_splats['sigmas'], target_weights)
-    
-    rotation_matrix, alignment_score = weighted_pca_alignment(
-        template_tuple, target_tuple, use_weights=use_weights
-    )
-    
-    # Apply rotation to volume
-    aligned = apply_rotation_to_volume(target, rotation_matrix)
-    
-    # Compute cross-correlation for consistency
-    score = cross_correlation_score(template, aligned)
-    
-    return aligned, score, rotation_matrix
 
 
 def align_icp_based(
@@ -751,7 +689,7 @@ def align_volumes(
     target : np.ndarray
         Target volume to align
     method : str
-        Alignment method: 'volume', 'pca', 'icp', 'ransac_icp', 'fourier', 'gradient'
+        Alignment method: 'volume', 'icp', 'ransac_icp', 'fourier', 'gradient'
     splat_params : Tuple[Dict, Dict], optional
         Tuple of (template_splats, target_splats) for splat-based methods.
         Each dict should have keys: 'centroids', 'weights', 'sigmas'
@@ -798,17 +736,13 @@ def align_volumes(
     config.update(method_kwargs)
     
     # Validate splat-based methods have splat params
-    splat_methods = ['pca', 'icp', 'ransac_icp']
+    splat_methods = ['icp', 'ransac_icp']
     if method in splat_methods and splat_params is None:
         raise ValueError(f"{method} method requires splat_params (template_splats, target_splats)")
     
     # Route to appropriate alignment function
     if method == 'volume':
         return align_volume_based(template, target, **config)
-    
-    elif method == 'pca':
-        template_splats, target_splats = splat_params
-        return align_pca_based(template, target, template_splats, target_splats, **config)
     
     elif method == 'icp':
         template_splats, target_splats = splat_params
