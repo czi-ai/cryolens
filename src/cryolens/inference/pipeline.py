@@ -57,7 +57,8 @@ class InferencePipeline:
         return_reconstruction: bool = True,
         return_splat_params: bool = False,
         use_identity_pose: bool = True,
-        splat_segment: str = 'affinity'
+        splat_segment: str = 'affinity',
+        use_final_convolution: bool = True
     ) -> Dict[str, Any]:
         """
         Process a single volume through the model.
@@ -76,6 +77,9 @@ class InferencePipeline:
             Whether to use identity pose for reconstruction
         splat_segment : str
             'affinity' for structure splats only, 'all' for all splats
+        use_final_convolution : bool
+            Whether to apply the final convolutional layers in the decoder.
+            Set to False to inspect raw Gaussian splat output without convolution.
             
         Returns
         -------
@@ -111,9 +115,9 @@ class InferencePipeline:
                     identity_pose = torch.zeros(1, 4, device=self.device)
                     identity_pose[:, 0] = 1.0  # Quaternion w component
                     identity_global_weight = torch.ones(1, 1, device=self.device)
-                    reconstruction = self.model.decoder(mu, identity_pose, identity_global_weight)
+                    reconstruction = self.model.decoder(mu, identity_pose, identity_global_weight, use_final_convolution=use_final_convolution)
                 else:
-                    reconstruction = self.model.decoder(mu, pose, global_weight)
+                    reconstruction = self.model.decoder(mu, pose, global_weight, use_final_convolution=use_final_convolution)
                 
                 # Remove batch and channel dimensions
                 reconstruction_np = reconstruction.cpu().numpy()[0, 0]
