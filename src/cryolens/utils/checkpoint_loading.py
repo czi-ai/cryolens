@@ -627,7 +627,9 @@ def load_vae_model(
             device=device,
             splat_sigma_range=config.get('splat_sigma_range', (0.005, 0.1)),
             padding=9,
-            latent_ratio=config.get('latent_ratio', 0.75)
+            latent_ratio=config.get('latent_ratio', 0.75),
+            use_histogram=config.get('use_histogram', False),
+            histogram_bins=config.get('histogram_bins', 32)
         )
     else:
         decoder = GaussianSplatDecoder(
