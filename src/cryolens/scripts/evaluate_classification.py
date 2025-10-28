@@ -190,9 +190,9 @@ def load_tomotwin_embeddings(
     embeddings = merged_df[embedding_cols].values.astype(np.float32)
     labels = [normalize_protein_name(protein) for protein in merged_df['protein']]
     
-    # Extract run names from filepath (format: output/runXXX/...)
+    # Extract run names from filepath (format: runXXX/...)
     run_names = []
-    for fp in merged_df['filepath']:
+    for fp in merged_df['filepath_x']:  # Use filepath_x from coords_df
         parts = fp.split('/')
         if len(parts) >= 1:
             run_names.append(parts[0])
