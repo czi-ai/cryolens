@@ -34,7 +34,8 @@ from cryolens.evaluation.classification import (
     compute_statistical_significance
 )
 from cryolens.evaluation.attention_fusion_cv import (
-    stratified_cross_validation_with_attention
+    stratified_cross_validation_with_attention,
+    train_final_fusion_and_save
 )
 
 
@@ -495,6 +496,8 @@ def main():
                        help='Number of epochs for attention fusion training (default: 20)')
     parser.add_argument('--balance-classes', action='store_true',
                        help='Undersample majority classes for balanced evaluation')
+    parser.add_argument('--save-fused-embeddings', type=Path, default=None,
+                       help='Path to save final fused embeddings (only for attention fusion)')
     
     args = parser.parse_args()
     
@@ -724,6 +727,43 @@ def main():
         figure_path,
         embedding_dim=args.embedding_dim
     )
+    
+    # Save fused embeddings if requested (only for attention fusion)
+    if args.save_fused_embeddings and args.fusion_method == 'attention':
+        print("\n" + "="*70)
+        print("TRAINING FINAL FUSION MODEL AND SAVING EMBEDDINGS")
+        print("="*70)
+        
+        # Determine device
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
+        
+        # Train final model and save embeddings
+        fused_embeddings, metadata = train_final_fusion_and_save(
+            aligned_tt,
+            aligned_cl,
+            aligned_labels,
+            args.save_fused_embeddings,
+            sample_ids=None,  # Will auto-generate sample_0, sample_1, ...
+            n_epochs=args.attention_epochs,
+            random_seed=args.random_seed,
+            device=device,
+            verbose=True
+        )
+        
+        print(f"\nFused embeddings metadata:")
+        print(f"  Output path: {metadata['output_path']}")
+        print(f"  Samples: {metadata['n_samples']}")
+        print(f"  Embedding dimension: {metadata['embedding_dim']}D")
+        print(f"  Classes: {metadata['class_names']}")
+    elif args.save_fused_embeddings and args.fusion_method != 'attention':
+        print(f"\n⚠ WARNING: --save-fused-embeddings only works with attention fusion")
+        print(f"  Current fusion method: {args.fusion_method}")
+        print(f"  Skipping fused embeddings save.")
     
     print("\n" + "="*70)
     print("EVALUATION COMPLETE")

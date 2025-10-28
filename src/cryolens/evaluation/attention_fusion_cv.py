@@ -5,7 +5,8 @@ Extends stratified_cross_validation to handle attention fusion by training
 the fusion model inside each CV fold to prevent test/train leakage.
 """
 
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,6 +16,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import average_precision_score, accuracy_score
+import h5py
 
 
 class SimpleAttentionFusion(nn.Module):
@@ -306,3 +308,161 @@ def stratified_cross_validation_with_attention(
         result['label_encoder'] = le
     
     return result
+
+
+def train_final_fusion_and_save(
+    tt_embeddings: np.ndarray,
+    cl_embeddings: np.ndarray,
+    labels: List[str],
+    output_h5_path: Path,
+    sample_ids: Optional[List[str]] = None,
+    n_epochs: int = 20,
+    random_seed: int = 171717,
+    device: str = 'cpu',
+    verbose: bool = True
+) -> Tuple[np.ndarray, Dict]:
+    """
+    Train final attention fusion model on full dataset and save fused embeddings.
+    
+    This function is called after cross-validation to train a single fusion model
+    on all available data. The resulting fused embeddings can be reused for
+    downstream tasks without needing to retrain the fusion model.
+    
+    Args:
+        tt_embeddings: TomoTwin embeddings (N, 32)
+        cl_embeddings: CryoLens embeddings (N, 32)
+        labels: Class labels for all samples
+        output_h5_path: Path to save fused embeddings HDF5 file
+        sample_ids: Optional list of sample IDs (default: sample_0, sample_1, ...)
+        n_epochs: Number of training epochs
+        random_seed: Random seed for reproducibility
+        device: Device for training ('cpu', 'cuda', 'mps')
+        verbose: Whether to print progress
+        
+    Returns:
+        Tuple of (fused_embeddings array, metadata dict)
+    """
+    if verbose:
+        print("\nTraining final fusion model on full dataset...")
+        print(f"  Samples: {len(labels)}")
+        print(f"  Epochs: {n_epochs}")
+        print(f"  Device: {device}")
+    
+    # Encode labels
+    le = LabelEncoder()
+    labels_encoded = le.fit_transform(labels)
+    n_classes = len(le.classes_)
+    
+    # Standardize
+    scaler_tt = StandardScaler()
+    scaler_cl = StandardScaler()
+    
+    tt_scaled = scaler_tt.fit_transform(tt_embeddings)
+    cl_scaled = scaler_cl.fit_transform(cl_embeddings)
+    
+    # Create model
+    model = SimpleAttentionFusion().to(device)
+    classifier_head = nn.Linear(32, n_classes).to(device)
+    
+    # Setup training
+    optimizer = optim.Adam(
+        list(model.parameters()) + list(classifier_head.parameters()),
+        lr=0.001
+    )
+    criterion = nn.CrossEntropyLoss()
+    
+    # Create data loader
+    train_data = TensorDataset(
+        torch.FloatTensor(tt_scaled),
+        torch.FloatTensor(cl_scaled),
+        torch.LongTensor(labels_encoded)
+    )
+    train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
+    
+    # Train
+    model.train()
+    classifier_head.train()
+    
+    for epoch in range(n_epochs):
+        total_loss = 0.0
+        n_batches = 0
+        
+        for tt_batch, cl_batch, y_batch in train_loader:
+            tt_batch = tt_batch.to(device)
+            cl_batch = cl_batch.to(device)
+            y_batch = y_batch.to(device)
+            
+            optimizer.zero_grad()
+            fused = model(tt_batch, cl_batch)
+            logits = classifier_head(fused)
+            loss = criterion(logits, y_batch)
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            n_batches += 1
+        
+        if verbose and (epoch + 1) % 5 == 0:
+            avg_loss = total_loss / n_batches
+            print(f"  Epoch {epoch+1}/{n_epochs}: Loss = {avg_loss:.4f}")
+    
+    # Generate fused embeddings for all samples
+    if verbose:
+        print("\nGenerating fused embeddings...")
+    
+    model.eval()
+    with torch.no_grad():
+        fused_embeddings = model(
+            torch.FloatTensor(tt_scaled).to(device),
+            torch.FloatTensor(cl_scaled).to(device)
+        ).cpu().numpy()
+    
+    # Generate sample IDs if not provided
+    if sample_ids is None:
+        sample_ids = [f"sample_{i}" for i in range(len(labels))]
+    
+    # Save to HDF5 in same format as CryoLens embeddings
+    if verbose:
+        print(f"\nSaving fused embeddings to {output_h5_path}...")
+    
+    output_h5_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with h5py.File(output_h5_path, 'w') as f:
+        # Create embeddings group
+        embeddings_group = f.create_group('embeddings')
+        
+        # Save each sample
+        for sample_id, embedding, label in zip(sample_ids, fused_embeddings, labels):
+            sample_group = embeddings_group.create_group(sample_id)
+            sample_group.create_dataset('mu', data=embedding)
+            sample_group.attrs['structure_name'] = label
+        
+        # Save metadata
+        metadata_group = f.create_group('metadata')
+        metadata_group.attrs['fusion_method'] = 'attention'
+        metadata_group.attrs['n_samples'] = len(labels)
+        metadata_group.attrs['embedding_dim'] = fused_embeddings.shape[1]
+        metadata_group.attrs['n_epochs'] = n_epochs
+        metadata_group.attrs['random_seed'] = random_seed
+        metadata_group.attrs['n_classes'] = n_classes
+        
+        # Save class names
+        metadata_group.create_dataset(
+            'class_names',
+            data=np.array(le.classes_, dtype='S')
+        )
+    
+    if verbose:
+        print(f"  Saved {len(sample_ids)} fused embeddings (32D)")
+        print(f"  Classes: {le.classes_.tolist()}")
+    
+    # Return embeddings and metadata
+    metadata = {
+        'n_samples': len(labels),
+        'embedding_dim': fused_embeddings.shape[1],
+        'n_classes': n_classes,
+        'class_names': le.classes_.tolist(),
+        'output_path': str(output_h5_path)
+    }
+    
+    return fused_embeddings, metadata
