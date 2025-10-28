@@ -73,7 +73,7 @@ def normalize_protein_name(name: str) -> str:
     return name_corrections.get(normalized, normalized)
 
 
-def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str]]:
+def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str], List[str]]:
     """
     Load CryoLens embeddings from H5 file, extracting only structural dimensions.
     
@@ -86,10 +86,11 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
         structural_dim: Number of structural dimensions to extract (default: 32)
         
     Returns:
-        Tuple of (32D embeddings array, list of labels)
+        Tuple of (32D embeddings array, list of labels, list of run names)
     """
     embeddings_list = []
     labels_list = []
+    run_names_list = []
     
     with h5py.File(h5_path, 'r') as f:
         embeddings_group = f['embeddings']
@@ -123,19 +124,28 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
                 parts = sample_id.split('_')
                 structure_name = parts[0] if len(parts) >= 1 else 'unknown'
             
+            # Extract run name from sample_id
+            # Format: "protein_run_picks_id" -> extract "run"
+            if len(sample_id.split('_')) >= 2:
+                run_name = sample_id.split('_')[1]
+            else:
+                run_name = 'unknown'
+            
             labels_list.append(normalize_protein_name(structure_name))
+            run_names_list.append(run_name)
     
     embeddings = np.array(embeddings_list, dtype=np.float32)
     print(f"  Extracted {structural_dim}D structural embeddings (from {embedding.shape[0]}D total)")
+    print(f"  Unique runs: {len(set(run_names_list))}")
     
-    return embeddings, labels_list
+    return embeddings, labels_list, run_names_list
 
 
 def load_tomotwin_embeddings(
     parquet_path: Path,
     coords_path: Path,
     embedding_dim: int = 32
-) -> Tuple[np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, List[str], List[str]]:
     """
     Load TomoTwin embeddings from parquet and coordinates CSV.
     
@@ -145,7 +155,7 @@ def load_tomotwin_embeddings(
         embedding_dim: Expected embedding dimension (default: 32)
         
     Returns:
-        Tuple of (32D embeddings array, list of labels)
+        Tuple of (32D embeddings array, list of labels, list of run names)
     """
     embeddings_df = pd.read_parquet(parquet_path)
     coords_df = pd.read_csv(coords_path)
@@ -180,7 +190,18 @@ def load_tomotwin_embeddings(
     embeddings = merged_df[embedding_cols].values.astype(np.float32)
     labels = [normalize_protein_name(protein) for protein in merged_df['protein']]
     
-    return embeddings, labels
+    # Extract run names from filepath (format: output/runXXX/...)
+    run_names = []
+    for fp in merged_df['filepath']:
+        parts = fp.split('/')
+        if len(parts) >= 1:
+            run_names.append(parts[0])
+        else:
+            run_names.append('unknown')
+    
+    print(f"  Unique runs: {len(set(run_names))}")
+    
+    return embeddings, labels, run_names
 
 
 def align_embeddings(
@@ -519,7 +540,7 @@ def main():
     
     # Load CryoLens embeddings (extract structural dimensions only)
     print("  Loading CryoLens embeddings...")
-    cl_embeddings, cl_labels = load_cryolens_embeddings(
+    cl_embeddings, cl_labels, cl_runs = load_cryolens_embeddings(
         Path(config['cryolens_embeddings']),
         structural_dim=args.embedding_dim
     )
@@ -527,7 +548,7 @@ def main():
     
     # Load TomoTwin embeddings
     print("  Loading TomoTwin embeddings...")
-    tt_embeddings, tt_labels = load_tomotwin_embeddings(
+    tt_embeddings, tt_labels, tt_runs = load_tomotwin_embeddings(
         Path(config['tomotwin_embeddings']),
         Path(config['tomotwin_coords']),
         embedding_dim=args.embedding_dim
