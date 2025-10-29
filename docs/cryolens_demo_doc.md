@@ -1,0 +1,69 @@
+# CryoLens Demo App Documentation
+
+The CryoLens Demo App allows you to explore **precomputed inference results** from CryoLens on a subset of tomograms from the model evaluation data hosted on the [CryoET Data Portal](https://cryoetdataportal.czscience.com). The app supports interactive visualization of particle annotations and similarity search powered by fused embeddings.
+
+> **Note**: CryoLens details and quickstart notebooks can be found on the [CryoLens model page on the Virtual Cell Platform](https://virtualcellmodels.cziscience.com/model/cryolens).
+
+The CryoLens Demo App has been tested on **Google Chrome** and may not behave consistently on other browsers.
+
+## Interface Overview
+
+The app has two main areas:
+- An **image canvas** (left) showing the tomogram and ground truth annotations with a scale bar in **Angstroms**.
+- A **control panel** and **list of particles**(right).
+
+### Tomogram Visualization
+
+- Choose a tomogram from the dropdown list at the top.
+- The app initially loads a low-resolution tomogram for faster performance; higher-resolution tiles load as you zoom in.
+- Each option corresponds to a **run within a dataset** on the CryoET Data Portal. [Learn more about CryoET data organization and terminology here](https://chanzuckerberg.github.io/cryoet-data-portal/stable/cryoet_data_portal_docsite_data.html#data-organization).
+- Adjust the visibility of the tomogram using the Contrast range slider, as the default contrast is not pre-optimized.
+- Use the Slice Position slider to scroll through slices of the 3D volume with units in **Angstroms**.
+- You can **zoom** using scroll or two-finger gestures (on Mac).
+- **Pan** by clicking and dragging the image.
+
+Below the selector, the link **“View run on the CryoET Data Portal”** opens the specific run page on the CryoET Data Portal in a new tab.
+
+
+### Ground Truth Annotations
+
+Below the visualization controls is a list of all particles with ground truth annotations in the current tomogram.
+
+For each particle type:
+- A **solid-colored circle** marker is shown in the canvas.
+- A label shows the particle name and number of instances (e.g., `cytosolicRibosome (24)`).
+- You can expand each list to see Z positions for each instance.
+- Clicking a particle in the expanded list updates the canvas to center that particle in 3D space.
+
+**Note**: The selected particle will be shown as an **open circle**. You may notice a slight offset from the ground truth marker, and this is a known issue.
+
+### Find Similar Particles
+
+When you double-click anywhere in the tomogram, the app selects the **nearest labelled particle** and retrieves a list of **similar particles** across the full tomogram based on the similarity of their embeddings. This list is shown in the Similar Particles (Embeddings) widget.
+
+Details:
+- Similar particles are found using **fused embeddings** combining CryoLens and [TomoTwin](https://tomotwin-cryoet.readthedocs.io/en/stable/) features.
+- Each result is marked with an **open circle** colored according to the particle type.
+- The results are grouped by query and listed in collapsible accordions.
+- Each list includes:
+  - Individual particles Z positions.
+  - Trash icons to delete individual particles or full lists.
+- At the top of the widget, the `CLEAR` button deletes all lists and the `EXPORT` button downloads them as an `.ndjson` file.
+
+**How are fused embeddings computed?**  
+CryoLens enhances TomoTwin embeddings by incorporating [brief explanation from Kyle will go here, e.g., orientation-invariant structural features + cross-tomogram contextualization].
+
+## Exporting Picks
+
+Click the **`EXPORT`** button to download all particle sets selected during your session.
+
+- Exported file format: `.ndjson`.
+- The exported file includes all lists of similar particles.
+- This file can be loaded in [napari](https://napari.org/stable/) using the [CryoLens plugin](#), which enables viewing single particle reconstructions.
+
+## Share Your Feedback
+
+We welcome your feedback!
+
+- Click the **“Give Feedback”** link in the demo app (top right panel)
+- Or submit through [this form](#) 
