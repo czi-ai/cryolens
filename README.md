@@ -57,13 +57,14 @@ Extract structural embeddings suitable for:
 - Clustering and analysis
 
 ### Interactive Tools
-- **Napari plugin**: Real-time feedback during particle picking ([napari-cryolens](https://github.com/kephale/napari-cryolens))
+- **napari plugin**: Real-time feedback during particle picking ([napari-cryolens](https://github.com/kephale/napari-cryolens))
 - **FastAPI server**: REST API for integration into analysis pipelines
 
 ## Model Weights
 
-Pre-trained model weights are available at:
-https://virtualcellmodels.cziscience.com/model/cryolens
+Pre-trained model weights are automatically downloaded when using named versions of cryolens models. Currently this includes:
+
+- `v001`, the first publicly available set of cryolens weights
 
 ## Documentation
 
