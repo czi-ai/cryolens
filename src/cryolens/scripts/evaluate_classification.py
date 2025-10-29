@@ -73,7 +73,7 @@ def normalize_protein_name(name: str) -> str:
     return name_corrections.get(normalized, normalized)
 
 
-def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str], List[str]]:
+def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str], List[str], List[Dict]]:
     """
     Load CryoLens embeddings from H5 file, extracting only structural dimensions.
     
@@ -86,11 +86,12 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
         structural_dim: Number of structural dimensions to extract (default: 32)
         
     Returns:
-        Tuple of (32D embeddings array, list of labels, list of run names)
+        Tuple of (32D embeddings array, list of labels, list of run names, list of metadata dicts)
     """
     embeddings_list = []
     labels_list = []
     run_names_list = []
+    metadata_list = []
     
     with h5py.File(h5_path, 'r') as f:
         embeddings_group = f['embeddings']
@@ -111,6 +112,23 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
             # Extract only structural dimensions (first 32D of 40D)
             structural_embedding = embedding[:structural_dim]
             embeddings_list.append(structural_embedding)
+            
+            # Extract metadata from sample_group attributes
+            sample_metadata = {
+                'sample_id': sample_id,
+                'coordinates': sample_group.attrs.get('coordinates', None),
+                'object_name': sample_group.attrs.get('object_name', None),
+                'picks_index': sample_group.attrs.get('picks_index', None),
+                'point_index': sample_group.attrs.get('point_index', None),
+                'run_name': sample_group.attrs.get('run_name', None),
+                'voxel_spacing': sample_group.attrs.get('voxel_spacing', None)
+            }
+            
+            # Convert numpy arrays to lists for JSON serialization
+            if sample_metadata['coordinates'] is not None:
+                sample_metadata['coordinates'] = sample_metadata['coordinates'].tolist()
+            
+            metadata_list.append(sample_metadata)
             
             # Get structure name from metadata or sample_id
             structure_name = None
@@ -138,7 +156,7 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
     print(f"  Extracted {structural_dim}D structural embeddings (from {embedding.shape[0]}D total)")
     print(f"  Unique runs: {len(set(run_names_list))}")
     
-    return embeddings, labels_list, run_names_list
+    return embeddings, labels_list, run_names_list, metadata_list
 
 
 def load_tomotwin_embeddings(
@@ -207,10 +225,11 @@ def load_tomotwin_embeddings(
 def align_embeddings(
     cl_embeddings: np.ndarray,
     cl_labels: List[str],
+    cl_metadata: List[Dict],
     tt_embeddings: np.ndarray,
     tt_labels: List[str],
     random_seed: int = 171717
-) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+) -> Tuple[np.ndarray, np.ndarray, List[str], List[Dict], List[str]]:
     """
     Align CryoLens and TomoTwin embeddings by matching structure labels.
     
@@ -220,13 +239,14 @@ def align_embeddings(
     Args:
         cl_embeddings: CryoLens embeddings (32D)
         cl_labels: CryoLens labels
+        cl_metadata: CryoLens metadata
         tt_embeddings: TomoTwin embeddings (32D)
         tt_labels: TomoTwin labels
         random_seed: Random seed for sampling
         
     Returns:
         Tuple of (aligned CryoLens embeddings, aligned TomoTwin embeddings,
-                 aligned labels, list of common structures)
+                 aligned labels, aligned metadata, list of common structures)
     """
     # Verify dimensions match
     if cl_embeddings.shape[1] != tt_embeddings.shape[1]:
@@ -248,6 +268,7 @@ def align_embeddings(
     aligned_cl = []
     aligned_tt = []
     aligned_labels = []
+    aligned_metadata = []
     
     np.random.seed(random_seed)
     
@@ -268,11 +289,13 @@ def align_embeddings(
         aligned_cl.extend(cl_embeddings[cl_selected])
         aligned_tt.extend(tt_embeddings[tt_selected])
         aligned_labels.extend([structure] * n_samples)
+        aligned_metadata.extend([cl_metadata[i] for i in cl_selected])
     
     return (
         np.array(aligned_cl, dtype=np.float32),
         np.array(aligned_tt, dtype=np.float32),
         aligned_labels,
+        aligned_metadata,
         common_structures
     )
 
@@ -540,7 +563,7 @@ def main():
     
     # Load CryoLens embeddings (extract structural dimensions only)
     print("  Loading CryoLens embeddings...")
-    cl_embeddings, cl_labels, cl_runs = load_cryolens_embeddings(
+    cl_embeddings, cl_labels, cl_runs, cl_metadata = load_cryolens_embeddings(
         Path(config['cryolens_embeddings']),
         structural_dim=args.embedding_dim
     )
@@ -557,8 +580,8 @@ def main():
     
     # Align embeddings
     print("\nAligning embeddings...")
-    aligned_cl, aligned_tt, aligned_labels, common_structures = align_embeddings(
-        cl_embeddings, cl_labels, tt_embeddings, tt_labels, args.random_seed
+    aligned_cl, aligned_tt, aligned_labels, aligned_metadata, common_structures = align_embeddings(
+        cl_embeddings, cl_labels, cl_metadata, tt_embeddings, tt_labels, args.random_seed
     )
     
     print(f"  Aligned {len(aligned_labels)} samples ({args.embedding_dim}D each)")
@@ -590,6 +613,7 @@ def main():
         balanced_tt = []
         balanced_cl = []
         balanced_labels = []
+        balanced_metadata = []
         
         np.random.seed(args.random_seed)
         
@@ -606,11 +630,13 @@ def main():
             balanced_tt.extend(aligned_tt[selected_indices])
             balanced_cl.extend(aligned_cl[selected_indices])
             balanced_labels.extend([class_name] * len(selected_indices))
+            balanced_metadata.extend([aligned_metadata[i] for i in selected_indices])
         
         # Convert to arrays
         aligned_tt = np.array(balanced_tt, dtype=np.float32)
         aligned_cl = np.array(balanced_cl, dtype=np.float32)
         aligned_labels = balanced_labels
+        aligned_metadata = balanced_metadata
         
         print(f"  Balanced to {len(aligned_labels)} total samples ({min_count} per class)")
     
@@ -769,7 +795,7 @@ def main():
             aligned_cl,
             aligned_labels,
             args.save_fused_embeddings,
-            sample_ids=None,  # Will auto-generate sample_0, sample_1, ...
+            sample_metadata=aligned_metadata,
             n_epochs=args.attention_epochs,
             random_seed=args.random_seed,
             device=device,
