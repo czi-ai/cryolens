@@ -315,7 +315,7 @@ def train_final_fusion_and_save(
     cl_embeddings: np.ndarray,
     labels: List[str],
     output_h5_path: Path,
-    sample_ids: Optional[List[str]] = None,
+    sample_metadata: Optional[List[Dict]] = None,
     n_epochs: int = 20,
     random_seed: int = 171717,
     device: str = 'cpu',
@@ -333,7 +333,7 @@ def train_final_fusion_and_save(
         cl_embeddings: CryoLens embeddings (N, 32)
         labels: Class labels for all samples
         output_h5_path: Path to save fused embeddings HDF5 file
-        sample_ids: Optional list of sample IDs (default: sample_0, sample_1, ...)
+        sample_metadata: Optional list of metadata dicts (from CryoLens) containing run_id, coordinates, etc.
         n_epochs: Number of training epochs
         random_seed: Random seed for reproducibility
         device: Device for training ('cpu', 'cuda', 'mps')
@@ -417,10 +417,6 @@ def train_final_fusion_and_save(
             torch.FloatTensor(cl_scaled).to(device)
         ).cpu().numpy()
     
-    # Generate sample IDs if not provided
-    if sample_ids is None:
-        sample_ids = [f"sample_{i}" for i in range(len(labels))]
-    
     # Save to HDF5 in same format as CryoLens embeddings
     if verbose:
         print(f"\nSaving fused embeddings to {output_h5_path}...")
@@ -431,11 +427,35 @@ def train_final_fusion_and_save(
         # Create embeddings group
         embeddings_group = f.create_group('embeddings')
         
-        # Save each sample
-        for sample_id, embedding, label in zip(sample_ids, fused_embeddings, labels):
+        # Save each sample with metadata
+        for i, (embedding, label) in enumerate(zip(fused_embeddings, labels)):
+            # Get metadata for this sample if available
+            if sample_metadata is not None and i < len(sample_metadata):
+                meta = sample_metadata[i]
+                sample_id = meta.get('sample_id', f"sample_{i}")
+            else:
+                meta = {}
+                sample_id = f"sample_{i}"
+            
             sample_group = embeddings_group.create_group(sample_id)
             sample_group.create_dataset('mu', data=embedding)
+            
+            # Save all metadata as attributes
             sample_group.attrs['structure_name'] = label
+            
+            # Save original CryoLens metadata if available
+            if 'coordinates' in meta and meta['coordinates'] is not None:
+                sample_group.attrs['coordinates'] = np.array(meta['coordinates'])
+            if 'object_name' in meta and meta['object_name'] is not None:
+                sample_group.attrs['object_name'] = meta['object_name']
+            if 'picks_index' in meta and meta['picks_index'] is not None:
+                sample_group.attrs['picks_index'] = meta['picks_index']
+            if 'point_index' in meta and meta['point_index'] is not None:
+                sample_group.attrs['point_index'] = meta['point_index']
+            if 'run_name' in meta and meta['run_name'] is not None:
+                sample_group.attrs['run_name'] = meta['run_name']
+            if 'voxel_spacing' in meta and meta['voxel_spacing'] is not None:
+                sample_group.attrs['voxel_spacing'] = meta['voxel_spacing']
         
         # Save metadata
         metadata_group = f.create_group('metadata')
@@ -453,7 +473,7 @@ def train_final_fusion_and_save(
         )
     
     if verbose:
-        print(f"  Saved {len(sample_ids)} fused embeddings (32D)")
+        print(f"  Saved {len(labels)} fused embeddings (32D)")
         print(f"  Classes: {le.classes_.tolist()}")
     
     # Return embeddings and metadata
