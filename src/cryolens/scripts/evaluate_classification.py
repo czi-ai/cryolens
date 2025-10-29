@@ -113,44 +113,44 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
             structural_embedding = embedding[:structural_dim]
             embeddings_list.append(structural_embedding)
             
-            # Extract metadata from sample_group attributes
-            sample_metadata = {
-                'sample_id': sample_id,
-                'coordinates': sample_group.attrs.get('coordinates', None),
-                'object_name': sample_group.attrs.get('object_name', None),
-                'picks_index': sample_group.attrs.get('picks_index', None),
-                'point_index': sample_group.attrs.get('point_index', None),
-                'run_name': sample_group.attrs.get('run_name', None),
-                'voxel_spacing': sample_group.attrs.get('voxel_spacing', None)
-            }
+            # Extract metadata from metadata group (not from sample attributes!)
+            sample_metadata = {'sample_id': sample_id}
+            
+            if sample_id in metadata_group:
+                meta = metadata_group[sample_id]
+                # Read attributes from metadata group
+                sample_metadata['coordinates'] = meta.attrs.get('coordinates', None)
+                sample_metadata['object_name'] = meta.attrs.get('object_name', None)
+                sample_metadata['picks_index'] = meta.attrs.get('picks_index', None)
+                sample_metadata['point_index'] = meta.attrs.get('point_index', None)
+                sample_metadata['run_name'] = meta.attrs.get('run_name', None)
+                sample_metadata['voxel_spacing'] = meta.attrs.get('voxel_spacing', None)
             
             # Convert numpy arrays to lists for JSON serialization
-            if sample_metadata['coordinates'] is not None:
+            if sample_metadata.get('coordinates') is not None:
                 sample_metadata['coordinates'] = sample_metadata['coordinates'].tolist()
             
             metadata_list.append(sample_metadata)
             
             # Get structure name from metadata or sample_id
-            structure_name = None
-            if sample_id in metadata_group:
-                meta = metadata_group[sample_id]
-                if 'object_type' in meta.attrs:
-                    structure_name = meta.attrs['object_type']
+            structure_name = sample_metadata.get('object_name', None)
             
             if structure_name is None:
                 # Extract from sample_id format: "protein_run_picks_id"
                 parts = sample_id.split('_')
                 structure_name = parts[0] if len(parts) >= 1 else 'unknown'
             
-            # Extract run name from sample_id
-            # Format: "protein_run_picks_id" -> extract "run"
-            if len(sample_id.split('_')) >= 2:
-                run_name = sample_id.split('_')[1]
-            else:
-                run_name = 'unknown'
+            # Extract run name from metadata or sample_id
+            run_name = sample_metadata.get('run_name', None)
+            if run_name is None:
+                # Format: "protein_run_picks_id" -> extract "run"
+                if len(sample_id.split('_')) >= 2:
+                    run_name = sample_id.split('_')[1]
+                else:
+                    run_name = 'unknown'
             
             labels_list.append(normalize_protein_name(structure_name))
-            run_names_list.append(run_name)
+            run_names_list.append(str(run_name))
     
     embeddings = np.array(embeddings_list, dtype=np.float32)
     print(f"  Extracted {structural_dim}D structural embeddings (from {embedding.shape[0]}D total)")
