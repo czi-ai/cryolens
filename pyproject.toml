@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,7 +12,7 @@ authors = [
 ]
 requires-python = ">=3.11,<3.13"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
 dependencies = [
     "numpy>=1.23.0",
     "torch>=2.0.0",
