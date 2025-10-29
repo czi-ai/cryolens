@@ -101,7 +101,8 @@ class CopickDataLoader:
         box_size: int = 48,
         runs_to_process: Optional[int] = None,
         normalize: bool = True,
-        verbose: bool = True
+        verbose: bool = True,
+        portal_meta_query: Optional[Dict] = None
     ) -> Dict[str, Dict[str, np.ndarray]]:
         """
         Load particles from the Copick project.
@@ -124,6 +125,13 @@ class CopickDataLoader:
             Whether to normalize particles (z-score normalization)
         verbose : bool
             Whether to print progress information
+        portal_meta_query : Optional[Dict]
+            Optional metadata query for filtering picks when using Copick projects
+            integrated with the CZ cryoET Data Portal. Common use case is to filter
+            for ground truth annotations: {'ground_truth_status': True}.
+            If None, retrieves all picks without filtering. Only works with portal-
+            integrated Copick projects; standard filesystem-only projects should
+            leave this as None. Default: None
             
         Returns
         -------
@@ -203,7 +211,12 @@ class CopickDataLoader:
                 continue
             
             # Process picks for each structure
-            for picks in run.get_picks(portal_meta_query={'ground_truth_status': True}):
+            if portal_meta_query is not None:
+                picks_list = run.get_picks(portal_meta_query=portal_meta_query)
+            else:
+                picks_list = run.get_picks()
+            
+            for picks in picks_list:
                 structure_name = picks.pickable_object_name
                 
                 # Apply structure filter
