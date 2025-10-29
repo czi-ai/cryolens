@@ -34,7 +34,8 @@ from cryolens.evaluation.classification import (
     compute_statistical_significance
 )
 from cryolens.evaluation.attention_fusion_cv import (
-    stratified_cross_validation_with_attention
+    stratified_cross_validation_with_attention,
+    train_final_fusion_and_save
 )
 
 
@@ -72,7 +73,7 @@ def normalize_protein_name(name: str) -> str:
     return name_corrections.get(normalized, normalized)
 
 
-def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str]]:
+def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[np.ndarray, List[str], List[str], List[Dict]]:
     """
     Load CryoLens embeddings from H5 file, extracting only structural dimensions.
     
@@ -85,10 +86,12 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
         structural_dim: Number of structural dimensions to extract (default: 32)
         
     Returns:
-        Tuple of (32D embeddings array, list of labels)
+        Tuple of (32D embeddings array, list of labels, list of run names, list of metadata dicts)
     """
     embeddings_list = []
     labels_list = []
+    run_names_list = []
+    metadata_list = []
     
     with h5py.File(h5_path, 'r') as f:
         embeddings_group = f['embeddings']
@@ -110,31 +113,57 @@ def load_cryolens_embeddings(h5_path: Path, structural_dim: int = 32) -> Tuple[n
             structural_embedding = embedding[:structural_dim]
             embeddings_list.append(structural_embedding)
             
-            # Get structure name from metadata or sample_id
-            structure_name = None
+            # Extract metadata from metadata group (not from sample attributes!)
+            sample_metadata = {'sample_id': sample_id}
+            
             if sample_id in metadata_group:
                 meta = metadata_group[sample_id]
-                if 'object_type' in meta.attrs:
-                    structure_name = meta.attrs['object_type']
+                # Read attributes from metadata group
+                sample_metadata['coordinates'] = meta.attrs.get('coordinates', None)
+                sample_metadata['object_name'] = meta.attrs.get('object_name', None)
+                sample_metadata['picks_index'] = meta.attrs.get('picks_index', None)
+                sample_metadata['point_index'] = meta.attrs.get('point_index', None)
+                sample_metadata['run_name'] = meta.attrs.get('run_name', None)
+                sample_metadata['voxel_spacing'] = meta.attrs.get('voxel_spacing', None)
+            
+            # Convert numpy arrays to lists for JSON serialization
+            if sample_metadata.get('coordinates') is not None:
+                sample_metadata['coordinates'] = sample_metadata['coordinates'].tolist()
+            
+            metadata_list.append(sample_metadata)
+            
+            # Get structure name from metadata or sample_id
+            structure_name = sample_metadata.get('object_name', None)
             
             if structure_name is None:
                 # Extract from sample_id format: "protein_run_picks_id"
                 parts = sample_id.split('_')
                 structure_name = parts[0] if len(parts) >= 1 else 'unknown'
             
+            # Extract run name from metadata or sample_id
+            run_name = sample_metadata.get('run_name', None)
+            if run_name is None:
+                # Format: "protein_run_picks_id" -> extract "run"
+                if len(sample_id.split('_')) >= 2:
+                    run_name = sample_id.split('_')[1]
+                else:
+                    run_name = 'unknown'
+            
             labels_list.append(normalize_protein_name(structure_name))
+            run_names_list.append(str(run_name))
     
     embeddings = np.array(embeddings_list, dtype=np.float32)
     print(f"  Extracted {structural_dim}D structural embeddings (from {embedding.shape[0]}D total)")
+    print(f"  Unique runs: {len(set(run_names_list))}")
     
-    return embeddings, labels_list
+    return embeddings, labels_list, run_names_list, metadata_list
 
 
 def load_tomotwin_embeddings(
     parquet_path: Path,
     coords_path: Path,
     embedding_dim: int = 32
-) -> Tuple[np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, List[str], List[str]]:
     """
     Load TomoTwin embeddings from parquet and coordinates CSV.
     
@@ -144,7 +173,7 @@ def load_tomotwin_embeddings(
         embedding_dim: Expected embedding dimension (default: 32)
         
     Returns:
-        Tuple of (32D embeddings array, list of labels)
+        Tuple of (32D embeddings array, list of labels, list of run names)
     """
     embeddings_df = pd.read_parquet(parquet_path)
     coords_df = pd.read_csv(coords_path)
@@ -179,16 +208,28 @@ def load_tomotwin_embeddings(
     embeddings = merged_df[embedding_cols].values.astype(np.float32)
     labels = [normalize_protein_name(protein) for protein in merged_df['protein']]
     
-    return embeddings, labels
+    # Extract run names from filepath (format: runXXX/...)
+    run_names = []
+    for fp in merged_df['filepath_x']:  # Use filepath_x from coords_df
+        parts = fp.split('/')
+        if len(parts) >= 1:
+            run_names.append(parts[0])
+        else:
+            run_names.append('unknown')
+    
+    print(f"  Unique runs: {len(set(run_names))}")
+    
+    return embeddings, labels, run_names
 
 
 def align_embeddings(
     cl_embeddings: np.ndarray,
     cl_labels: List[str],
+    cl_metadata: List[Dict],
     tt_embeddings: np.ndarray,
     tt_labels: List[str],
     random_seed: int = 171717
-) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+) -> Tuple[np.ndarray, np.ndarray, List[str], List[Dict], List[str]]:
     """
     Align CryoLens and TomoTwin embeddings by matching structure labels.
     
@@ -198,13 +239,14 @@ def align_embeddings(
     Args:
         cl_embeddings: CryoLens embeddings (32D)
         cl_labels: CryoLens labels
+        cl_metadata: CryoLens metadata
         tt_embeddings: TomoTwin embeddings (32D)
         tt_labels: TomoTwin labels
         random_seed: Random seed for sampling
         
     Returns:
         Tuple of (aligned CryoLens embeddings, aligned TomoTwin embeddings,
-                 aligned labels, list of common structures)
+                 aligned labels, aligned metadata, list of common structures)
     """
     # Verify dimensions match
     if cl_embeddings.shape[1] != tt_embeddings.shape[1]:
@@ -226,6 +268,7 @@ def align_embeddings(
     aligned_cl = []
     aligned_tt = []
     aligned_labels = []
+    aligned_metadata = []
     
     np.random.seed(random_seed)
     
@@ -246,11 +289,13 @@ def align_embeddings(
         aligned_cl.extend(cl_embeddings[cl_selected])
         aligned_tt.extend(tt_embeddings[tt_selected])
         aligned_labels.extend([structure] * n_samples)
+        aligned_metadata.extend([cl_metadata[i] for i in cl_selected])
     
     return (
         np.array(aligned_cl, dtype=np.float32),
         np.array(aligned_tt, dtype=np.float32),
         aligned_labels,
+        aligned_metadata,
         common_structures
     )
 
@@ -495,6 +540,8 @@ def main():
                        help='Number of epochs for attention fusion training (default: 20)')
     parser.add_argument('--balance-classes', action='store_true',
                        help='Undersample majority classes for balanced evaluation')
+    parser.add_argument('--save-fused-embeddings', type=Path, default=None,
+                       help='Path to save final fused embeddings (only for attention fusion)')
     
     args = parser.parse_args()
     
@@ -516,7 +563,7 @@ def main():
     
     # Load CryoLens embeddings (extract structural dimensions only)
     print("  Loading CryoLens embeddings...")
-    cl_embeddings, cl_labels = load_cryolens_embeddings(
+    cl_embeddings, cl_labels, cl_runs, cl_metadata = load_cryolens_embeddings(
         Path(config['cryolens_embeddings']),
         structural_dim=args.embedding_dim
     )
@@ -524,7 +571,7 @@ def main():
     
     # Load TomoTwin embeddings
     print("  Loading TomoTwin embeddings...")
-    tt_embeddings, tt_labels = load_tomotwin_embeddings(
+    tt_embeddings, tt_labels, tt_runs = load_tomotwin_embeddings(
         Path(config['tomotwin_embeddings']),
         Path(config['tomotwin_coords']),
         embedding_dim=args.embedding_dim
@@ -533,8 +580,8 @@ def main():
     
     # Align embeddings
     print("\nAligning embeddings...")
-    aligned_cl, aligned_tt, aligned_labels, common_structures = align_embeddings(
-        cl_embeddings, cl_labels, tt_embeddings, tt_labels, args.random_seed
+    aligned_cl, aligned_tt, aligned_labels, aligned_metadata, common_structures = align_embeddings(
+        cl_embeddings, cl_labels, cl_metadata, tt_embeddings, tt_labels, args.random_seed
     )
     
     print(f"  Aligned {len(aligned_labels)} samples ({args.embedding_dim}D each)")
@@ -566,6 +613,7 @@ def main():
         balanced_tt = []
         balanced_cl = []
         balanced_labels = []
+        balanced_metadata = []
         
         np.random.seed(args.random_seed)
         
@@ -582,11 +630,13 @@ def main():
             balanced_tt.extend(aligned_tt[selected_indices])
             balanced_cl.extend(aligned_cl[selected_indices])
             balanced_labels.extend([class_name] * len(selected_indices))
+            balanced_metadata.extend([aligned_metadata[i] for i in selected_indices])
         
         # Convert to arrays
         aligned_tt = np.array(balanced_tt, dtype=np.float32)
         aligned_cl = np.array(balanced_cl, dtype=np.float32)
         aligned_labels = balanced_labels
+        aligned_metadata = balanced_metadata
         
         print(f"  Balanced to {len(aligned_labels)} total samples ({min_count} per class)")
     
@@ -724,6 +774,43 @@ def main():
         figure_path,
         embedding_dim=args.embedding_dim
     )
+    
+    # Save fused embeddings if requested (only for attention fusion)
+    if args.save_fused_embeddings and args.fusion_method == 'attention':
+        print("\n" + "="*70)
+        print("TRAINING FINAL FUSION MODEL AND SAVING EMBEDDINGS")
+        print("="*70)
+        
+        # Determine device
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
+        
+        # Train final model and save embeddings
+        fused_embeddings, metadata = train_final_fusion_and_save(
+            aligned_tt,
+            aligned_cl,
+            aligned_labels,
+            args.save_fused_embeddings,
+            sample_metadata=aligned_metadata,
+            n_epochs=args.attention_epochs,
+            random_seed=args.random_seed,
+            device=device,
+            verbose=True
+        )
+        
+        print(f"\nFused embeddings metadata:")
+        print(f"  Output path: {metadata['output_path']}")
+        print(f"  Samples: {metadata['n_samples']}")
+        print(f"  Embedding dimension: {metadata['embedding_dim']}D")
+        print(f"  Classes: {metadata['class_names']}")
+    elif args.save_fused_embeddings and args.fusion_method != 'attention':
+        print(f"\n⚠ WARNING: --save-fused-embeddings only works with attention fusion")
+        print(f"  Current fusion method: {args.fusion_method}")
+        print(f"  Skipping fused embeddings save.")
     
     print("\n" + "="*70)
     print("EVALUATION COMPLETE")
