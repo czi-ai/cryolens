@@ -49,8 +49,18 @@ Details:
   - Trash icons to delete individual particles or full lists.
 - At the top of the widget, the `CLEAR` button deletes all lists and the `EXPORT` button downloads them as an `.ndjson` file.
 
-**How are fused embeddings computed?**  
-CryoLens enhances TomoTwin embeddings by incorporating [brief explanation from Kyle will go here, e.g., orientation-invariant structural features + cross-tomogram contextualization].
+### Fused Embeddings
+
+Fused embeddings combine TomoTwin and CryoLens features using attention-based fusion, which works as follows:
+
+Inputs: TomoTwin embeddings (32D) + CryoLens structural embeddings (32D)
+Attention mechanism: Neural network learns importance weights for each embedding source
+Fusion: Weighted embeddings are concatenated and processed through a 3-layer MLP (128→64→32D)
+Training: Supervised with classification labels to optimize feature combination
+
+This mechanism was designed to be comparable to both sets of original embeddings, so it outputs a 32D embedding per particle. The benefit of this method is that it emphasizes whichever embedding is more informative. Extra steps were taken to ensure fusion trained inside each CV fold when evaluating performance.
+
+The result is a single 32D embedding that has been optimized to combine the strengths of TomoTwin, which has been optimized for classification, and CryoLens, which has been optimized for 3D reconstruction for improved classification performance.
 
 ## Exporting Picks
 
@@ -58,7 +68,9 @@ Click the **`EXPORT`** button to download all particle sets selected during your
 
 - Exported file format: `.ndjson`.
 - The exported file includes all lists of similar particles.
-- This file can be loaded in [napari](https://napari.org/stable/) using the [CryoLens plugin](#), which enables viewing single particle reconstructions.
+- This file can be loaded in either:
+-- the [example quickstart](https://virtualcellmodels.cziscience.com/quickstart/cryolens-quickstart), or
+-- [napari](https://napari.org/stable/) using the [CryoLens plugin](https://github.com/czi-ai/napari-cryolens).
 
 ## Share Your Feedback
 
