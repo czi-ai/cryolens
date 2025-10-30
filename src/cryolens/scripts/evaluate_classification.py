@@ -584,6 +584,12 @@ def main():
         cl_embeddings, cl_labels, cl_metadata, tt_embeddings, tt_labels, args.random_seed
     )
     
+    # Store original aligned embeddings for saving fused embeddings later
+    original_aligned_cl = aligned_cl.copy()
+    original_aligned_tt = aligned_tt.copy()
+    original_aligned_labels = aligned_labels.copy()
+    original_aligned_metadata = aligned_metadata.copy()
+    
     print(f"  Aligned {len(aligned_labels)} samples ({args.embedding_dim}D each)")
     print(f"  Classes: {common_structures}")
     
@@ -791,11 +797,11 @@ def main():
         
         # Train final model and save embeddings
         fused_embeddings, metadata = train_final_fusion_and_save(
-            aligned_tt,
-            aligned_cl,
-            aligned_labels,
+            original_aligned_tt,
+            original_aligned_cl,
+            original_aligned_labels,
             args.save_fused_embeddings,
-            sample_metadata=aligned_metadata,
+            sample_metadata=original_aligned_metadata,
             n_epochs=args.attention_epochs,
             random_seed=args.random_seed,
             device=device,
