@@ -1,21 +1,21 @@
-# CryoLens Demo App Documentation
+# Try CryoLens Documentation
 
-The CryoLens Demo App allows you to explore **precomputed inference results** from CryoLens on a subset of tomograms from the model evaluation data hosted on the [CryoET Data Portal](https://cryoetdataportal.czscience.com). The app supports interactive visualization of particle annotations and similarity search powered by fused embeddings.
+Try CryoLens is a demo webapp that allows you to explore **precomputed inference results** from CryoLens on a subset of tomograms from the model evaluation data hosted on the [CryoET Data Portal](https://cryoetdataportal.czscience.com). This demo supports interactive visualization of particle annotations and similarity search powered by fused embeddings.
 
 > **Note**: CryoLens details and quickstart notebooks can be found on the [CryoLens model page on the Virtual Cell Platform](https://virtualcellmodels.cziscience.com/model/cryolens).
 
-The CryoLens Demo App has been tested on **Google Chrome** and may not behave consistently on other browsers.
+Try CryoLens has been tested on **Google Chrome** and may not behave consistently on other browsers.
 
 ## Interface Overview
 
-The app has two main areas:
+Try CryoLens has two main areas:
 - An **image canvas** (left) showing the tomogram and ground truth annotations with a scale bar in **Angstroms**.
 - A **control panel** and **list of particles**(right).
 
 ### Tomogram Visualization
 
 - Choose a tomogram from the dropdown list at the top.
-- The app initially loads a low-resolution tomogram for faster performance; higher-resolution tiles load as you zoom in.
+- Try CryoLens initially loads a low-resolution tomogram for faster performance; higher-resolution tiles load as you zoom in.
 - Each option corresponds to a **run within a dataset** on the CryoET Data Portal. [Learn more about CryoET data organization and terminology here](https://chanzuckerberg.github.io/cryoet-data-portal/stable/cryoet_data_portal_docsite_data.html#data-organization).
 - Adjust the visibility of the tomogram using the Contrast range slider, as the default contrast is not pre-optimized.
 - Use the Slice Position slider to scroll through slices of the 3D volume with units in **Angstroms**.
@@ -23,7 +23,6 @@ The app has two main areas:
 - **Pan** by clicking and dragging the image.
 
 Below the selector, the link **“View run on the CryoET Data Portal”** opens the specific run page on the CryoET Data Portal in a new tab.
-
 
 ### Ground Truth Annotations
 
@@ -39,7 +38,7 @@ For each particle type:
 
 ### Find Similar Particles
 
-When you double-click anywhere in the tomogram, the app selects the **nearest labelled particle** and retrieves a list of **similar particles** across the full tomogram based on the similarity of their embeddings. This list is shown in the Similar Particles (Embeddings) widget.
+When you double-click anywhere in the tomogram, Try CryoLens selects the **nearest labelled particle** and retrieves a list of **similar particles** across the full tomogram based on the similarity of their embeddings. This list is shown in the Similar Particles (Embeddings) widget.
 
 Details:
 - Similar particles are found using **fused embeddings** combining CryoLens and [TomoTwin](https://tomotwin-cryoet.readthedocs.io/en/stable/) features.
