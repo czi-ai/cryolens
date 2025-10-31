@@ -1,6 +1,6 @@
 # CryoLens
 
-<video src="docs/img/cryolens_video.mp4" width="600" autoplay loop muted controls></video>
+[![Video from napari that shows a synthetic cryoET tomogram with high signal being populated by CryoLens reconstructions. There are 10 differeny protein structures in the tomogram. Over a hundred reconstructions are added then the word "CryoLens" is shown.](https://github.com/czi-ai/cryolens/assets/docs/img/cryolens_video.gif)](https://github.com/czi-ai/cryolens/assets/docs/img/cryolens_video.mp4)
 
 A pre-trained generative model for particle analysis in cryo-electron tomography.
 
