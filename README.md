@@ -1,5 +1,7 @@
 # CryoLens
 
+<video src="docs/img/cryolens_video.mp4" width="600" autoplay loop muted controls></video>
+
 A pre-trained generative model for particle analysis in cryo-electron tomography.
 
 ## Overview
