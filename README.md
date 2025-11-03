@@ -11,7 +11,7 @@ CryoLens uses a variational autoencoder with a segmented Gaussian splat decoder 
 - **Learned embeddings** that capture structural features
 - **Real-time feedback** during particle picking workflows
 
-The model is trained on 5.8 million synthetic particles spanning 103 protein structures and generalizes to experimental data.
+The model is trained on 5.8 million synthetic particles spanning 103 protein structures. We suggest fine tuning the model on your own data.
 
 ## Quick Start
 
@@ -67,6 +67,8 @@ Extract structural embeddings suitable for:
 Pre-trained model weights are automatically downloaded when using named versions of cryolens models. Currently this includes:
 
 - `v001`, the first publicly available set of cryolens weights
+
+When testing out CryoLens on new datasets, we suggest finetuning the model.
 
 ## Documentation
 
