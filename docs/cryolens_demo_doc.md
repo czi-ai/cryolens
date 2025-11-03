@@ -8,6 +8,8 @@ Try CryoLens has been tested on **Google Chrome** and may not behave consistentl
 
 ## Interface Overview
 
+![A screenshot of the Try CryoLens app. It shows a tomogram with particle picks as points and a side bar on the rightside that lists object types.](./img/try_cryolens_001.png)
+
 Try CryoLens has two main areas:
 - An **image canvas** (left) showing the tomogram and ground truth annotations with a scale bar in **Angstroms**.
 - A **control panel** and **list of particles**(right).
@@ -60,6 +62,8 @@ This mechanism was designed to be comparable to both sets of original embeddings
 The result is a single 32D embedding that has been optimized to combine the strengths of TomoTwin, which has been optimized for classification, and CryoLens, which has been optimized for 3D reconstruction for improved classification performance.
 
 ## Exporting Picks
+
+![A cropped screenshot of the user using the export button to export picks from the Try CryoLens app](./img/try_cryolens_export.png)
 
 Click the **`EXPORT`** button to download all particle sets selected during your session.
 
