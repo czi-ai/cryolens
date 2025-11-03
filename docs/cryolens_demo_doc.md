@@ -8,6 +8,8 @@ Try CryoLens has been tested on **Google Chrome** and may not behave consistentl
 
 ## Interface Overview
 
+![A screenshot of the Try CryoLens app. It shows a tomogram with particle picks as points and a side bar on the rightside that lists object types.](./img/try_cryolens_001.png)
+
 Try CryoLens has two main areas:
 - An **image canvas** (left) showing the tomogram and ground truth annotations with a scale bar in **Angstroms**.
 - A **control panel** and **list of particles**(right).
