@@ -63,6 +63,8 @@ The result is a single 32D embedding that has been optimized to combine the stre
 
 ## Exporting Picks
 
+![A cropped screenshot of the user using the export button to export picks from the Try CryoLens app](./img/try_cryolens_export.png)
+
 Click the **`EXPORT`** button to download all particle sets selected during your session.
 
 - Exported file format: `.ndjson`.
