@@ -510,7 +510,8 @@ class CryoLensServer:
                 # Convert input volumes to numpy array
                 input_volumes = np.array(request.input_volumes, dtype=np.float32)
                 num_volumes = len(input_volumes)
-                logger.info(f"Batch processing {num_volumes} volumes with operation: {request.operation}")
+                sanitized_operation = request.operation.replace('\r', '').replace('\n', '')
+                logger.info(f"Batch processing {num_volumes} volumes with operation: {sanitized_operation!r}")
                 
                 if request.operation == "reconstruction":
                     results = self.pipeline.process_batch(
