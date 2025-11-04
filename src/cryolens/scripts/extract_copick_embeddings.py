@@ -44,10 +44,13 @@ from datetime import datetime
 import numpy as np
 import torch
 import h5py
-from tqdm import tqdm
 
 from cryolens.utils.checkpoint_loading import load_vae_model, list_available_versions
 from cryolens.data import CopickDataLoader
+from cryolens.utils.optional_deps import get_tqdm
+
+# Get tqdm (or mock if not available)
+tqdm = get_tqdm()
 
 
 # Suppress warnings

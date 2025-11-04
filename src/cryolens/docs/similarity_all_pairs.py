@@ -15,7 +15,8 @@ from mrcfile import open as mrc_open
 from scipy.ndimage import zoom, gaussian_filter
 import sys
 import logging
-import gemmi
+
+from cryolens.utils.optional_deps import require_gemmi
 
 # Set up logger
 logging.basicConfig(
@@ -45,6 +46,9 @@ def get_all_pairs(db_path):
 
 def pdb_to_density(filename, box_size=48, voxel_size=10.0, resolution=15.0):
     """Convert PDB structure to density map with proper physical units."""
+    # Check for gemmi dependency
+    gemmi = require_gemmi()
+    
     try:
         # Read structure
         st = gemmi.read_structure(str(filename))
@@ -193,6 +197,9 @@ def get_projections(volume):
 
 def get_structure_info(pdb_path):
     """Extract structure information from PDB file."""
+    # Check for gemmi dependency
+    gemmi = require_gemmi()
+    
     try:
         st = gemmi.read_structure(str(pdb_path))
         

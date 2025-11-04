@@ -20,7 +20,6 @@ import h5py
 import mrcfile
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from tqdm import tqdm
 from scipy import ndimage
 from scipy.fft import fftn, ifftn, fftshift
 from scipy.ndimage import zoom
@@ -31,6 +30,10 @@ from cryolens.data import CopickDataLoader
 from cryolens.inference.pipeline import InferencePipeline
 from cryolens.evaluation.fsc import compute_fsc_with_threshold, apply_soft_mask
 from cryolens.utils.normalization import normalize_volume, denormalize_volume
+from cryolens.utils.optional_deps import get_tqdm
+
+# Get tqdm (or mock if not available)
+tqdm = get_tqdm()
 
 
 def load_mrc_structure(mrc_path: Path, box_size: int = 48) -> np.ndarray:

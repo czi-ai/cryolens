@@ -7,7 +7,6 @@ import numpy as np
 import os
 from pathlib import Path
 import threading
-from tqdm import tqdm
 import numpy.ma as ma
 from mrcfile import open as mrc_open
 from scipy.ndimage import zoom, gaussian_filter
@@ -18,8 +17,12 @@ import sys
 import shutil
 import torch
 from torch.nn import functional as F
-import gemmi
 import pandas as pd
+
+from cryolens.utils.optional_deps import get_tqdm, require_gemmi
+
+# Get tqdm (or mock if not available)
+tqdm = get_tqdm()
 
 # Set up logger
 logging.basicConfig(
@@ -245,6 +248,9 @@ class MRCProcessor:
         voxel_size = voxel_size or self.voxel_size
         resolution = resolution or self.resolution
         
+        # Check for gemmi dependency
+        gemmi = require_gemmi()
+        
         try:
             # Read structure
             st = gemmi.read_structure(str(filename))
@@ -322,6 +328,9 @@ class MRCProcessor:
     
     def _get_structure_info(self, pdb_path):
         """Extract structure information from PDB file."""
+        # Check for gemmi dependency
+        gemmi = require_gemmi()
+        
         try:
             st = gemmi.read_structure(str(pdb_path))
             
