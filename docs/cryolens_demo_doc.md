@@ -39,7 +39,7 @@ For each particle type:
 When you double-click anywhere in the tomogram, Try CryoLens selects the **nearest labelled particle** and retrieves a list of **similar particles** across the full tomogram based on the similarity of their embeddings. This list is shown in the Similar Particles (Embeddings) widget.
 
 Details:
-- The selected particle will be shown as an **open circle**. You may notice a slight offset from the ground truth marker, and this is a known issue.
+- The selected particle will be shown as an **open circle**. This open circle will almost completely overlap with a solid circle, since it corresponds to one of the ground truth particles that are already labelled.  
 - Similar particles are found using **fused embeddings** combining CryoLens and [TomoTwin](https://tomotwin-cryoet.readthedocs.io/en/stable/) features.
 - Each result is marked with an **open circle** colored according to the particle type.
 - The results are grouped by query and listed in collapsible accordions.
@@ -52,12 +52,12 @@ Details:
 
 Fused embeddings combine TomoTwin and CryoLens features using attention-based fusion, which works as follows:
 
-Inputs: TomoTwin embeddings (32D) + CryoLens structural embeddings (32D)
-Attention mechanism: Neural network learns importance weights for each embedding source
-Fusion: Weighted embeddings are concatenated and processed through a 3-layer MLP (128→64→32D)
-Training: Supervised with classification labels to optimize feature combination
+ - Inputs: TomoTwin embeddings (32D) + CryoLens structural embeddings (32D).
+ - Attention mechanism: Neural network learns importance weights for each embedding source.
+ - Fusion: Weighted embeddings are concatenated and processed through a 3-layer Multi-Layer Perceptron (MLP). (128→64→32D)
+ - Training: Supervised with classification labels to optimize feature combination.
 
-This mechanism was designed to be comparable to both sets of original embeddings, so it outputs a 32D embedding per particle. The benefit of this method is that it emphasizes whichever embedding is more informative. Extra steps were taken to ensure fusion trained inside each CV fold when evaluating performance.
+This mechanism was designed to be comparable to both sets of original embeddings, so it outputs a 32D embedding per particle. The benefit of this method is that it emphasizes whichever embedding is more informative. Extra steps were taken to ensure fusion trained inside each cross validation (CV) fold when evaluating performance.
 
 The result is a single 32D embedding that has been optimized to combine the strengths of TomoTwin, which has been optimized for classification, and CryoLens, which has been optimized for 3D reconstruction for improved classification performance.
 
@@ -77,5 +77,5 @@ Click the **`EXPORT`** button to download all particle sets selected during your
 
 We welcome your feedback!
 
-- Click the **“Give Feedback”** link in the demo app (top right panel)
-- Or submit through [this form](#) 
+- Click the **“Give Feedback”** link in the demo app (top right panel).
+- Or submit through [this form]([#](https://airtable.com/app78IB3m6DJSxkMO/pagUurVUUyh2Auwsc/form?hide_user_id=true&hide_amplitude_id=true&hide_device_id=true&hide_page_id=true&prefill_event=docs1&hide_event=true) 
