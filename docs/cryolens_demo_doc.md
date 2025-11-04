@@ -36,7 +36,7 @@ For each particle type:
 
 ### Find Similar Particles
 
-When you double-click anywhere in the tomogram, Try CryoLens will add a colored solid star on the **nearest labelled particle** to where you clicked, and it will use that particle to retrieve a list of **similar particles** across the full tomogram based on the similarity of their embeddings. This list is shown in the Similar Particles (Embeddings) widget and on the canvas throughout the tomogram the top 10 most similar particles will be outlined with a ring of the same color as the star.
+When you double-click anywhere in the tomogram, Try CryoLens will add a colored solid star on the **nearest labelled particle** to where you clicked, and it will use that particle to retrieve a list of **similar particles** across the full tomogram based on the similarity of their embeddings. This list is shown in the Similar Particles (Embeddings) widget and throughout the tomogram, the top 10 most similar particles will be outlined with a ring of the same color as the star.
 
 Details:
 - The selected particle will be shown as an **solid star** of a different color than the particle type color.
