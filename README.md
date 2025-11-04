@@ -125,7 +125,12 @@ pytest tests/
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE](LICENSE) for details. However, some optional dependencies use different licenses:
+
+- gemmi (MPL-2.0) - PDB processing
+- tqdm (MPL-2.0) - Progress bars
+
+All dependencies are compatible with MIT licensing for distribution.
 
 ## Support
 
