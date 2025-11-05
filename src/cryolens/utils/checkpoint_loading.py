@@ -176,8 +176,13 @@ def create_dummy_classes():
     """
     Create dummy classes for handling checkpoints with missing dependencies.
     
-    Note: AdaptiveContrastiveAffinityLoss is now maintained as a deprecated stub
-    in cryolens.training.losses, so it doesn't need special handling here.
+    IMPORTANT: This function only creates dummy classes for things that DON'T
+    exist in the codebase (like CurriculumScheduler, tomotwin, etc.). It does NOT
+    create dummy module structures for real cryolens modules, as that would prevent
+    normal imports from working.
+    
+    Note: AdaptiveContrastiveAffinityLoss exists as a deprecated stub in
+    cryolens.training.losses, so it doesn't need special handling here.
     """
     class CurriculumScheduler:
         """Dummy class for removed curriculum scheduler."""
@@ -198,12 +203,12 @@ def create_dummy_classes():
         def TrainingConfig(self):
             return TrainingConfig
 
-    # Add to multiple namespaces to ensure they're found during unpickling
+    # CRITICAL: Only add to builtins and __main__ for unpickling compatibility
+    # Do NOT add to sys.modules as that interferes with normal imports
     import builtins
     import __main__
-    import types
     
-    # Add to builtins
+    # Add to builtins for pickle unpickling
     builtins.CurriculumScheduler = CurriculumScheduler
     builtins.TrainingConfig = TrainingConfig
     
@@ -218,68 +223,48 @@ def create_dummy_classes():
     setattr(current_module, 'TrainingConfig', TrainingConfig)
     setattr(current_module, 'tomotwin', DummyTomotwin())
     
-    # Also register as a module
+    # Register tomotwin as a standalone module (it doesn't exist in codebase)
     sys.modules['tomotwin'] = DummyTomotwin()
     sys.modules['CurriculumScheduler'] = CurriculumScheduler
     sys.modules['TrainingConfig'] = TrainingConfig
     
-    # Create cryolens.training.distributed module structure if needed
-    # This handles cases where the checkpoint expects these modules
-    
-    # Ensure cryolens exists
-    if 'cryolens' not in sys.modules:
-        cryolens_module = types.ModuleType('cryolens')
-        sys.modules['cryolens'] = cryolens_module
-    else:
-        cryolens_module = sys.modules['cryolens']
-    
-    # Create cryolens.training as a package (module with submodules)
-    if 'cryolens.training' not in sys.modules:
-        training_module = types.ModuleType('cryolens.training')
-        training_module.__path__ = []  # Make it a package
-        sys.modules['cryolens.training'] = training_module
-        setattr(cryolens_module, 'training', training_module)
-    else:
-        training_module = sys.modules['cryolens.training']
-        if not hasattr(training_module, '__path__'):
-            training_module.__path__ = []  # Make it a package if it isn't
-    
-    # Create cryolens.training.distributed
+    # Handle cryolens.training.distributed - create ONLY if it doesn't exist
+    # This module doesn't exist in the real codebase, so we can safely create a dummy
     if 'cryolens.training.distributed' not in sys.modules:
-        distributed_module = types.ModuleType('cryolens.training.distributed')
-        distributed_module.__path__ = []  # Make it a package
-        sys.modules['cryolens.training.distributed'] = distributed_module
-        setattr(training_module, 'distributed', distributed_module)
-    else:
-        distributed_module = sys.modules['cryolens.training.distributed']
+        import types
         
-    # Add common distributed training utilities as dummies
-    class DummyDistributedTrainer:
-        def __init__(self, *args, **kwargs):
-            pass
+        # Create minimal module structure for distributed
+        distributed_module = types.ModuleType('cryolens.training.distributed')
+        distributed_module.__path__ = []
+        
+        class DummyDistributedTrainer:
+            def __init__(self, *args, **kwargs):
+                pass
+        
+        class DistributedConfig:
+            """Dummy class for distributed configuration."""
+            def __init__(self, *args, **kwargs):
+                self.world_size = 1
+                self.rank = 0
+                self.local_rank = 0
+                self.backend = 'nccl'
+                self.master_addr = 'localhost'
+                self.master_port = '12355'
+        
+        setattr(distributed_module, 'DistributedTrainer', DummyDistributedTrainer)
+        setattr(distributed_module, 'DistributedConfig', DistributedConfig)
+        setattr(distributed_module, 'setup_distributed', lambda: None)
+        setattr(distributed_module, 'cleanup_distributed', lambda: None)
+        
+        sys.modules['cryolens.training.distributed'] = distributed_module
+        
+        # Also add to __main__ and builtins for maximum compatibility
+        setattr(__main__, 'DistributedConfig', DistributedConfig)
+        builtins.DistributedConfig = DistributedConfig
     
-    class DistributedConfig:
-        """Dummy class for distributed configuration."""
-        def __init__(self, *args, **kwargs):
-            self.world_size = 1
-            self.rank = 0
-            self.local_rank = 0
-            self.backend = 'nccl'
-            self.master_addr = 'localhost'
-            self.master_port = '12355'
-    
-    setattr(distributed_module, 'DistributedTrainer', DummyDistributedTrainer)
-    setattr(distributed_module, 'DistributedConfig', DistributedConfig)
-    setattr(distributed_module, 'setup_distributed', lambda: None)
-    setattr(distributed_module, 'cleanup_distributed', lambda: None)
-    
-    # Also add to __main__ and builtins for maximum compatibility
-    setattr(__main__, 'DistributedConfig', DistributedConfig)
-    builtins.DistributedConfig = DistributedConfig
-    
-    # Handle pathlib._local issue
-    # Create a dummy pathlib._local module
+    # Handle pathlib._local issue - this is a Python internal quirk
     if 'pathlib._local' not in sys.modules:
+        import types
         pathlib_local = types.ModuleType('pathlib._local')
         sys.modules['pathlib._local'] = pathlib_local
         
@@ -290,9 +275,10 @@ def create_dummy_classes():
         setattr(pathlib_local, 'PurePath', PurePath)
         setattr(pathlib_local, 'PurePosixPath', PurePosixPath)
     
-    # Also ensure pathlib itself isn't being treated as a package
+    # Also ensure pathlib itself has _local attribute
     import pathlib
     if not hasattr(pathlib, '_local'):
+        import types
         pathlib._local = types.ModuleType('pathlib._local')
         from pathlib import Path, PosixPath, PurePath, PurePosixPath
         pathlib._local.Path = Path
