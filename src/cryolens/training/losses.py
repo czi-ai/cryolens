@@ -484,3 +484,42 @@ class AffinityCosineLoss(nn.Module):
             # Return gradient-maintaining zero tensor
             zero_tensor = torch.tensor(0.0, device=self.device)
             return zero_tensor.requires_grad_()
+
+
+# =============================================================================
+# DEPRECATED CLASSES - Kept for backward compatibility with old checkpoints
+# =============================================================================
+
+class AdaptiveContrastiveAffinityLoss(nn.Module):
+    """
+    DEPRECATED: This loss function has been removed from CryoLens.
+    
+    This stub exists solely to allow loading checkpoints that were trained
+    with this loss function. It should not be used for new training runs.
+    
+    The class will be completely removed in CryoLens v2.0.
+    
+    Historical note: This was an experimental adaptive weighting variant of
+    ContrastiveAffinityLoss that was found to not provide benefits over the
+    simpler ContrastiveAffinityLoss implementation.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        import warnings
+        warnings.warn(
+            "AdaptiveContrastiveAffinityLoss is deprecated and should not be used. "
+            "This stub exists only for loading old checkpoints. "
+            "Use ContrastiveAffinityLoss instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        # Store any arguments for potential inspection
+        self._deprecated_args = args
+        self._deprecated_kwargs = kwargs
+    
+    def forward(self, *args, **kwargs):
+        """Returns zero loss - this should never be called in practice."""
+        # Determine device from inputs if available
+        device = args[0].device if args and hasattr(args[0], 'device') else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        return torch.tensor(0.0, device=device, requires_grad=True)
