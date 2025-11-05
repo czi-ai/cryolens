@@ -173,32 +173,32 @@ def list_available_versions() -> Dict[str, str]:
 
 
 def create_dummy_classes():
-    """Create dummy classes for handling checkpoints with missing dependencies."""
+    """
+    Create dummy classes for handling checkpoints with missing dependencies.
+    
+    Note: AdaptiveContrastiveAffinityLoss is now maintained as a deprecated stub
+    in cryolens.training.losses, so it doesn't need special handling here.
+    """
     class CurriculumScheduler:
+        """Dummy class for removed curriculum scheduler."""
         def __init__(self, *args, **kwargs):
             pass
 
     class TrainingConfig:
+        """Dummy class for training configuration."""
         def __init__(self, *args, **kwargs):
             pass
 
     class DummyTomotwin:
+        """Dummy class for tomotwin module."""
         def __init__(self):
             pass
         
         @property
         def TrainingConfig(self):
             return TrainingConfig
-    
-    class AdaptiveContrastiveAffinityLoss:
-        """Dummy class for removed loss function."""
-        def __init__(self, *args, **kwargs):
-            pass
-        
-        def forward(self, *args, **kwargs):
-            return 0.0
 
-    # Add to multiple namespaces to ensure they're found
+    # Add to multiple namespaces to ensure they're found during unpickling
     import builtins
     import __main__
     import types
@@ -206,27 +206,24 @@ def create_dummy_classes():
     # Add to builtins
     builtins.CurriculumScheduler = CurriculumScheduler
     builtins.TrainingConfig = TrainingConfig
-    builtins.AdaptiveContrastiveAffinityLoss = AdaptiveContrastiveAffinityLoss
     
     # Add to __main__ module (where the script runs)
     setattr(__main__, 'CurriculumScheduler', CurriculumScheduler)
     setattr(__main__, 'TrainingConfig', TrainingConfig)
     setattr(__main__, 'tomotwin', DummyTomotwin())
-    setattr(__main__, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
     
     # Add to current module
     current_module = sys.modules[__name__]
     setattr(current_module, 'CurriculumScheduler', CurriculumScheduler)
     setattr(current_module, 'TrainingConfig', TrainingConfig)
     setattr(current_module, 'tomotwin', DummyTomotwin())
-    setattr(current_module, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
     
     # Also register as a module
     sys.modules['tomotwin'] = DummyTomotwin()
     sys.modules['CurriculumScheduler'] = CurriculumScheduler
     sys.modules['TrainingConfig'] = TrainingConfig
     
-    # Create complete module structure for cryolens.training.losses and cryolens.training.distributed
+    # Create cryolens.training.distributed module structure if needed
     # This handles cases where the checkpoint expects these modules
     
     # Ensure cryolens exists
@@ -246,18 +243,6 @@ def create_dummy_classes():
         training_module = sys.modules['cryolens.training']
         if not hasattr(training_module, '__path__'):
             training_module.__path__ = []  # Make it a package if it isn't
-    
-    # Create cryolens.training.losses
-    if 'cryolens.training.losses' not in sys.modules:
-        losses_module = types.ModuleType('cryolens.training.losses')
-        losses_module.__path__ = []  # Make it a package
-        sys.modules['cryolens.training.losses'] = losses_module
-        setattr(training_module, 'losses', losses_module)
-    else:
-        losses_module = sys.modules['cryolens.training.losses']
-    
-    # Add the loss class to the losses module
-    setattr(losses_module, 'AdaptiveContrastiveAffinityLoss', AdaptiveContrastiveAffinityLoss)
     
     # Create cryolens.training.distributed
     if 'cryolens.training.distributed' not in sys.modules:
