@@ -176,13 +176,21 @@ def create_dummy_classes():
     """
     Create dummy classes for handling checkpoints with missing dependencies.
     
-    IMPORTANT: This function only creates dummy classes for things that DON'T
-    exist in the codebase (like CurriculumScheduler, tomotwin, etc.). It does NOT
-    create dummy module structures for real cryolens modules, as that would prevent
-    normal imports from working.
+    IMPORTANT: This function ONLY creates dummy classes for things that DON'T
+    exist in the codebase. It does NOT create dummy module structures for real
+    cryolens modules (like cryolens.training.losses or cryolens.training.distributed)
+    as that would prevent normal imports from working.
     
-    Note: AdaptiveContrastiveAffinityLoss exists as a deprecated stub in
-    cryolens.training.losses, so it doesn't need special handling here.
+    What we create dummies for:
+    - CurriculumScheduler: Removed from codebase
+    - TrainingConfig: Not a real class
+    - tomotwin: External dependency that may not be installed
+    - pathlib._local: Python internal quirk
+    
+    What we DON'T create dummies for:
+    - cryolens.training.losses: Real module with real classes
+    - cryolens.training.distributed: Real module with real classes
+    - AdaptiveContrastiveAffinityLoss: Exists as deprecated stub in losses.py
     """
     class CurriculumScheduler:
         """Dummy class for removed curriculum scheduler."""
@@ -204,7 +212,7 @@ def create_dummy_classes():
             return TrainingConfig
 
     # CRITICAL: Only add to builtins and __main__ for unpickling compatibility
-    # Do NOT add to sys.modules as that interferes with normal imports
+    # Do NOT add to sys.modules for any cryolens.* modules as that blocks real imports
     import builtins
     import __main__
     
@@ -228,41 +236,8 @@ def create_dummy_classes():
     sys.modules['CurriculumScheduler'] = CurriculumScheduler
     sys.modules['TrainingConfig'] = TrainingConfig
     
-    # Handle cryolens.training.distributed - create ONLY if it doesn't exist
-    # This module doesn't exist in the real codebase, so we can safely create a dummy
-    if 'cryolens.training.distributed' not in sys.modules:
-        import types
-        
-        # Create minimal module structure for distributed
-        distributed_module = types.ModuleType('cryolens.training.distributed')
-        distributed_module.__path__ = []
-        
-        class DummyDistributedTrainer:
-            def __init__(self, *args, **kwargs):
-                pass
-        
-        class DistributedConfig:
-            """Dummy class for distributed configuration."""
-            def __init__(self, *args, **kwargs):
-                self.world_size = 1
-                self.rank = 0
-                self.local_rank = 0
-                self.backend = 'nccl'
-                self.master_addr = 'localhost'
-                self.master_port = '12355'
-        
-        setattr(distributed_module, 'DistributedTrainer', DummyDistributedTrainer)
-        setattr(distributed_module, 'DistributedConfig', DistributedConfig)
-        setattr(distributed_module, 'setup_distributed', lambda: None)
-        setattr(distributed_module, 'cleanup_distributed', lambda: None)
-        
-        sys.modules['cryolens.training.distributed'] = distributed_module
-        
-        # Also add to __main__ and builtins for maximum compatibility
-        setattr(__main__, 'DistributedConfig', DistributedConfig)
-        builtins.DistributedConfig = DistributedConfig
-    
     # Handle pathlib._local issue - this is a Python internal quirk
+    # This is safe because pathlib._local isn't a real module in anyone's codebase
     if 'pathlib._local' not in sys.modules:
         import types
         pathlib_local = types.ModuleType('pathlib._local')
